@@ -1,0 +1,270 @@
+import type { CSSProperties } from "react";
+import type {
+  Element,
+  ListElement,
+  RichText,
+  ShapeElement,
+  TextElement,
+  TextStyle,
+} from "../model/types";
+import type { AssetMap } from "./assets";
+import { resolveAssetSrc } from "./assets";
+import { ChartView } from "./ChartView";
+import { TableView } from "./TableView";
+
+interface Props {
+  element: Element;
+  assets: AssetMap;
+}
+
+function transformStyle(el: Element): CSSProperties {
+  const t = el.transform;
+  return {
+    position: "absolute",
+    left: t.x,
+    top: t.y,
+    width: t.width,
+    height: t.height,
+    transform: t.rotation ? `rotate(${t.rotation}deg)` : undefined,
+    opacity: el.hidden ? 0 : t.opacity,
+    zIndex: t.zIndex,
+  };
+}
+
+function textCss(style: TextStyle): CSSProperties {
+  const isHeading = style.fontSize >= 52 || (style.fontWeight ?? 400) >= 700;
+  return {
+    fontFamily: style.fontFamily,
+    fontSize: style.fontSize,
+    color: style.color,
+    textAlign: style.align,
+    lineHeight: style.lineHeight,
+    letterSpacing: style.letterSpacing ?? (isHeading ? "var(--reveal-heading-letter-spacing, 0)" : undefined),
+    fontWeight: style.fontWeight,
+    textTransform: isHeading ? ("var(--reveal-heading-transform, none)" as CSSProperties["textTransform"]) : undefined,
+  };
+}
+
+function renderRich(rt: RichText) {
+  return rt.spans.map((s, i) => (
+    <span
+      key={i}
+      style={{
+        fontWeight: s.bold ? 700 : undefined,
+        fontStyle: s.italic ? "italic" : undefined,
+        color: s.color,
+      }}
+    >
+      {s.text}
+    </span>
+  ));
+}
+
+function TextInner({ el }: { el: TextElement }) {
+  const valign = el.style.valign ?? "top";
+  return (
+    <div
+      style={{
+        ...textCss(el.style),
+        width: "100%",
+        height: "100%",
+        display: "flex",
+        flexDirection: "column",
+        justifyContent:
+          valign === "middle" ? "center" : valign === "bottom" ? "flex-end" : "flex-start",
+        whiteSpace: "pre-wrap",
+        wordBreak: "break-word",
+        overflow: "hidden",
+      }}
+    >
+      <div>{renderRich(el.content)}</div>
+    </div>
+  );
+}
+
+function ListInner({ el }: { el: ListElement }) {
+  const gap = el.style.itemGap ?? 16;
+  const marker = el.style.markerColor ?? "var(--accent)";
+  return (
+    <div style={{ ...textCss(el.style), width: "100%", height: "100%", overflow: "hidden" }}>
+      <ol
+        style={{
+          listStyle: "none",
+          margin: 0,
+          padding: 0,
+          counterReset: "csg-li",
+        }}
+      >
+        {el.items.map((item, i) => (
+          <li
+            key={i}
+            style={{
+              display: "flex",
+              gap: 18,
+              marginBottom: gap,
+              alignItems: "baseline",
+            }}
+          >
+            <span
+              style={{
+                color: marker,
+                fontWeight: 700,
+                flexShrink: 0,
+                minWidth: el.ordered ? "1.4em" : "0.6em",
+              }}
+            >
+              {el.ordered ? `${i + 1}.` : "•"}
+            </span>
+            <span style={{ flex: 1 }}>{renderRich(item)}</span>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+function ShapeInner({ el }: { el: ShapeElement }) {
+  const fill = el.fill ?? "var(--accent)";
+  const stroke = el.stroke;
+  if (el.shape === "rect") {
+    return (
+      <div
+        style={{
+          width: "100%",
+          height: "100%",
+          background: fill,
+          borderRadius: el.cornerRadius ?? 0,
+          border: stroke ? `${stroke.width}px solid ${stroke.color}` : undefined,
+        }}
+      />
+    );
+  }
+  if (el.shape === "ellipse") {
+    return (
+      <div
+        style={{
+          width: "100%",
+          height: "100%",
+          background: fill,
+          borderRadius: "50%",
+          border: stroke ? `${stroke.width}px solid ${stroke.color}` : undefined,
+        }}
+      />
+    );
+  }
+  const w = Math.max(1, el.transform.width);
+  const h = Math.max(1, el.transform.height);
+  const sw = stroke?.width ?? 0;
+  const swLine = stroke?.width ?? 4;
+  const sc = stroke?.color ?? fill;
+
+  // line / arrow / triangle via SVG
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ width: "100%", height: "100%" }}>
+      {el.shape === "line" && (
+        <line x1="0" y1={h / 2} x2={w} y2={h / 2} stroke={sc} strokeWidth={swLine} />
+      )}
+      {el.shape === "arrow" && (
+        <g stroke={sc} strokeWidth={swLine} fill="none" strokeLinejoin="round" strokeLinecap="round">
+          <line x1="0" y1={h / 2} x2={w - 2} y2={h / 2} />
+          <polyline points={`${Math.max(0, w - Math.max(16, swLine * 2.5))},${h / 2 - Math.max(10, swLine * 1.5)} ${w - 2},${h / 2} ${Math.max(0, w - Math.max(16, swLine * 2.5))},${h / 2 + Math.max(10, swLine * 1.5)}`} />
+        </g>
+      )}
+      {el.shape === "triangle" && (
+        <polygon 
+          points={`${w / 2},${sw / 2} ${w - sw / 2},${h - sw / 2} ${sw / 2},${h - sw / 2}`} 
+          fill={fill} 
+          stroke={stroke?.color ?? "transparent"} 
+          strokeWidth={sw} 
+        />
+      )}
+    </svg>
+  );
+}
+
+export function ElementView({ element, assets }: Props) {
+  if (element.type === "audio") return null;
+
+  let inner: React.ReactNode = null;
+  switch (element.type) {
+    case "text":
+      inner = <TextInner el={element} />;
+      break;
+    case "list":
+      inner = <ListInner el={element} />;
+      break;
+    case "shape":
+      inner = <ShapeInner el={element} />;
+      break;
+    case "image": {
+      const src = resolveAssetSrc(element.assetId, assets);
+      inner = src ? (
+        <img
+          src={src}
+          alt=""
+          style={{
+            width: "100%",
+            height: "100%",
+            objectFit: element.fit,
+            borderRadius: element.cornerRadius ?? 0,
+            boxShadow: element.shadow
+              ? `${element.shadow.x}px ${element.shadow.y}px ${element.shadow.blur}px ${element.shadow.color}`
+              : undefined,
+          }}
+        />
+      ) : (
+        <div
+          style={{
+            width: "100%",
+            height: "100%",
+            borderRadius: element.cornerRadius ?? 0,
+            background: "var(--surface-2)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "var(--text-mute)",
+            fontSize: 28,
+            border: "2px dashed var(--rule)",
+          }}
+        >
+          圖片
+        </div>
+      );
+      break;
+    }
+    case "icon":
+      inner = (
+        <div
+          style={{
+            width: "100%",
+            height: "100%",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: element.color,
+            fontSize: Math.min(element.transform.width, element.transform.height) * 0.8,
+          }}
+        >
+          ◆
+        </div>
+      );
+      break;
+    case "chart":
+      inner = <ChartView config={element.config} />;
+      break;
+    case "table":
+      inner = <TableView config={element.config} />;
+      break;
+    case "group":
+      inner = (
+        <div style={{ position: "absolute", inset: 0 }}>
+          {element.children.map((child) => (
+            <ElementView key={child.id} element={child} assets={assets} />
+          ))}
+        </div>
+      );
+      break;
+  }
+
+  return <div style={transformStyle(element)}>{inner}</div>;
+}

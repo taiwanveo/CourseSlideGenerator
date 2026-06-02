@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"預設權限：視窗、對話框、檔案系統、HTTP、SQL。","local":true,"windows":["main"],"permissions":["core:default","dialog:default","fs:default","fs:allow-read-file","fs:allow-write-file","fs:allow-mkdir","http:default",{"identifier":"http:default","allow":[{"url":"https://*"}]},"sql:default","sql:allow-execute","sql:allow-select"]}}
