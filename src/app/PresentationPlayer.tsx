@@ -283,30 +283,6 @@ export function PresentationPlayer({ onClose }: { onClose: () => void }) {
         <PlayerBtn label="✕" onClick={onClose} title="離開播放 (Esc)" />
       </div>
 
-      {controlsVisible && slide?.notes?.trim() && (
-        <div
-          data-csg-player-controls="1"
-          onClick={(e) => e.stopPropagation()}
-          style={{
-            position: "fixed",
-            left: "50%",
-            top: 20,
-            transform: "translateX(-50%)",
-            maxWidth: "min(720px, 90vw)",
-            padding: "10px 16px",
-            borderRadius: 10,
-            background: "rgba(20,20,20,.72)",
-            backdropFilter: "blur(8px)",
-            color: "rgba(255,255,255,.92)",
-            fontSize: 13,
-            lineHeight: 1.5,
-            opacity: 0.95,
-            pointerEvents: "none",
-          }}
-        >
-          {slide.notes}
-        </div>
-      )}
       <style>{`
         @keyframes csg-player-fade {
           from { opacity: 0; }
