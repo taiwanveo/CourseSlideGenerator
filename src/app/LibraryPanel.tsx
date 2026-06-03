@@ -1,5 +1,5 @@
 /**
- * 我的簡報 — 列出已存檔的簡報，可開啟或刪除。資料來源為 ProjectStore（localStorage / Tauri SQLite）。
+ * 開啟舊檔 — 列出已存檔的簡報，可開啟或刪除。資料來源為 ProjectStore（localStorage / Tauri SQLite）。
  */
 import { useEffect, useState } from "react";
 import type { Project } from "../model/types";
@@ -40,7 +40,7 @@ export function LibraryPanel({
   };
 
   return (
-    <Modal title="我的簡報" onClose={onClose}>
+    <Modal title="開啟舊檔" onClose={onClose}>
       {loading ? (
         <div style={{ padding: 24, color: "var(--app-muted)" }}>載入中…</div>
       ) : items.length === 0 ? (

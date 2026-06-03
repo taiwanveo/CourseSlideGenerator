@@ -1,11 +1,10 @@
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { generatePresentation } from "../engine/ai/generate";
-import { listModels } from "../engine/llm/client";
 import { parseFile, parsePastedText, parseUrl, type ParsedImage } from "../engine/import/parse-document";
-import type { ModelInfo, ProviderId } from "../engine/llm/types";
 import type { GenerationQualityReport, OutlineCoverageReport } from "../model/types";
+import { isTauri } from "../platform";
 import { useEditor } from "../store/editorStore";
-import { PROVIDERS, useSettings } from "../store/settingsStore";
+import { useSettings } from "../store/settingsStore";
 
 interface Props {
   onClose: () => void;
@@ -34,16 +33,10 @@ export function GeneratePanel({ onClose }: Props) {
   } | null>(null);
   const [showCoverageDetails, setShowCoverageDetails] = useState(false);
   const [showQualityDetails, setShowQualityDetails] = useState(false);
-  const [models, setModels] = useState<ModelInfo[]>([]);
   const [deckStyle, setDeckStyle] = useState<"teaching" | "business" | "academic" | "casual">("teaching");
   const [pageStrategy, setPageStrategy] = useState<"compact" | "balanced" | "full">("balanced");
   const [emphasisKeywords, setEmphasisKeywords] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
-
-  const provider = settings.providerId;
-  const providerDef = PROVIDERS.find((p) => p.id === provider)!;
-  const apiKey = settings.apiKeys[provider] ?? "";
-  const model = settings.models[provider] ?? providerDef.defaultModel;
 
   const onPickFile = async (file: File) => {
     setError(null);
@@ -76,19 +69,6 @@ export function GeneratePanel({ onClose }: Props) {
       setFetchingUrl(false);
       setStage("");
     }
-  };
-
-  const fetchModels = async () => {
-    const creds = settings.credentials();
-    if (!creds) {
-      setError("請先輸入 API Key");
-      return;
-    }
-    setStage("讀取模型清單…");
-    const list = await listModels(creds);
-    setModels(list);
-    setStage("");
-    if (list.length === 0) setError("無法取得模型清單，可手動輸入模型名稱");
   };
 
   const onGenerate = async () => {
@@ -137,7 +117,7 @@ export function GeneratePanel({ onClose }: Props) {
 
   return (
     <Modal onClose={onClose} title="AI 生成教學簡報" wide>
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 320px", gap: 24, alignItems: "start" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 300px", gap: 20, alignItems: "start" }}>
         <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 10 }}>
           <input
             className="csg-input"
@@ -165,9 +145,15 @@ export function GeneratePanel({ onClose }: Props) {
               {fetchingUrl ? "抓取中…" : "抓取"}
             </button>
           </div>
+          {!isTauri() && (
+            <div style={{ fontSize: 12, color: "var(--app-muted)", marginTop: -2 }}>
+              小提醒：有些網站會限制瀏覽器直接讀取頁面內容，所以你可能會看到「無法連線」。
+              若遇到此情況，可改用桌面模式、改貼文章內文，或上傳檔案匯入。
+            </div>
+          )}
           <textarea
             className="csg-input"
-            style={{ minHeight: 240, resize: "vertical" }}
+            style={{ minHeight: 200, resize: "vertical" }}
             placeholder="貼上教學內容（文章 / 講稿 / 大綱），或從上方匯入網址 / 檔案…"
             value={text}
             onChange={(e) => {
@@ -190,10 +176,6 @@ export function GeneratePanel({ onClose }: Props) {
                 if (f) void onPickFile(f);
               }}
             />
-            <label style={{ fontSize: 13, display: "flex", gap: 6, alignItems: "center", marginLeft: "auto" }}>
-              <input type="checkbox" checked={refine} onChange={(e) => setRefine(e.target.checked)} />
-              翻譯／潤飾內容
-            </label>
           </div>
           {images.length > 0 && (
             <div style={{ fontSize: 12, color: "var(--app-accent)" }}>
@@ -203,61 +185,8 @@ export function GeneratePanel({ onClose }: Props) {
         </div>
 
         <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 10 }}>
-          <label className="csg-field-label">AI 供應商</label>
-          <select
-            className="csg-select"
-            value={provider}
-            onChange={(e) => settings.setProvider(e.target.value as ProviderId)}
-          >
-            {PROVIDERS.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-
-          <label className="csg-field-label">API Key</label>
-          <input
-            className="csg-input"
-            type="password"
-            value={apiKey}
-            placeholder="貼上 API Key"
-            onChange={(e) => settings.setApiKey(provider, e.target.value)}
-          />
-          <a href={providerDef.docsUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "var(--app-accent)" }}>
-            取得 {providerDef.name} 金鑰 →
-          </a>
-
-          <label className="csg-field-label">模型</label>
-          <div style={{ display: "flex", gap: 6 }}>
-            {models.length > 0 ? (
-              <select
-                className="csg-select"
-                style={{ flex: 1, minWidth: 0 }}
-                value={model}
-                onChange={(e) => settings.setModel(provider, e.target.value)}
-              >
-                {models.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.label}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <input
-                className="csg-input"
-                style={{ flex: 1, minWidth: 0 }}
-                value={model}
-                onChange={(e) => settings.setModel(provider, e.target.value)}
-              />
-            )}
-            <button className="csg-btn-sm" style={{ flexShrink: 0 }} onClick={fetchModels}>
-              列出
-            </button>
-          </div>
-
           <div style={{ fontSize: 12, color: "var(--app-muted)" }}>
-            覆蓋率門檻：{settings.coverageThreshold}%（可在上方工具列「設定」調整）
+            覆蓋率門檻：{settings.coverageThreshold}%（AI 模型與金鑰請在上方工具列「設定」調整）
           </div>
 
           <label className="csg-field-label">生成風格</label>
@@ -282,6 +211,40 @@ export function GeneratePanel({ onClose }: Props) {
             onChange={(e) => setEmphasisKeywords(e.target.value)}
             placeholder="例如：定義、公式、結論（用逗號分隔）"
           />
+
+          <label style={{ fontSize: 13, display: "flex", gap: 6, alignItems: "center", marginTop: 2 }}>
+            <input type="checkbox" checked={refine} onChange={(e) => setRefine(e.target.checked)} />
+            翻譯／潤飾內容
+          </label>
+
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+              marginTop: 6,
+            }}
+          >
+            {stage && <span style={{ fontSize: 13, color: "var(--app-muted)" }}>{stage}</span>}
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, flexWrap: "wrap" }}>
+              {(coverage || quality) && (
+                <button
+                  className="csg-btn"
+                  onClick={() => exportQualityReport(coverage, quality)}
+                  disabled={busy}
+                  title="匯出覆蓋率與品質檢查報告"
+                >
+                  匯出報告 JSON
+                </button>
+              )}
+              <button className="csg-btn" onClick={onClose} disabled={busy}>
+                {coverage ? "完成" : "取消"}
+              </button>
+              <button className="csg-btn csg-btn-accent" onClick={onGenerate} disabled={busy}>
+                {busy ? "生成中…" : "開始生成"}
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -368,25 +331,6 @@ export function GeneratePanel({ onClose }: Props) {
         </div>
       )}
 
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 18, alignItems: "center" }}>
-        {stage && <span style={{ fontSize: 13, color: "var(--app-muted)" }}>{stage}</span>}
-        {(coverage || quality) && (
-          <button
-            className="csg-btn"
-            onClick={() => exportQualityReport(coverage, quality)}
-            disabled={busy}
-            title="匯出覆蓋率與品質檢查報告"
-          >
-            匯出報告 JSON
-          </button>
-        )}
-        <button className="csg-btn" onClick={onClose} disabled={busy}>
-          {coverage ? "完成" : "取消"}
-        </button>
-        <button className="csg-btn csg-btn-accent" onClick={onGenerate} disabled={busy}>
-          {busy ? "生成中…" : "開始生成"}
-        </button>
-      </div>
     </Modal>
   );
 }
@@ -412,11 +356,13 @@ function exportQualityReport(
 
 export function Modal({
   title,
+  headerExtra,
   children,
   onClose,
   wide,
 }: {
   title: string;
+  headerExtra?: ReactNode;
   children: React.ReactNode;
   onClose: () => void;
   wide?: boolean;
@@ -430,7 +376,7 @@ export function Modal({
         background: "rgba(0,0,0,.55)",
         display: "grid",
         placeItems: "center",
-        zIndex: 1000,
+        zIndex: 30000,
       }}
     >
       <div
@@ -447,7 +393,17 @@ export function Modal({
           boxShadow: "0 24px 80px rgba(0,0,0,.5)",
         }}
       >
-        <h2 style={{ fontSize: 17, marginBottom: 16 }}>{title}</h2>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            marginBottom: 16,
+          }}
+        >
+          <h2 style={{ fontSize: 17, margin: 0, flex: 1, minWidth: 0 }}>{title}</h2>
+          {headerExtra}
+        </div>
         {children}
       </div>
     </div>

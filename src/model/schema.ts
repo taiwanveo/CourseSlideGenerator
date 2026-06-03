@@ -89,6 +89,14 @@ const baseTextSchema = z.object({
   type: z.literal("text"),
   content: richTextSchema,
   style: textStyleSchema,
+  href: z.string().optional(),
+  link: z
+    .object({
+      kind: z.enum(["url", "slide"]),
+      value: z.string(),
+      target: z.enum(["self", "blank"]).optional(),
+    })
+    .optional(),
   autoSize: z.boolean().optional(),
 });
 

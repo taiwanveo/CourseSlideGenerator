@@ -1,5 +1,3 @@
-use tauri::Manager;
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -14,6 +12,7 @@ pub fn run() {
         .setup(|app| {
             #[cfg(debug_assertions)]
             {
+                use tauri::Manager;
                 if let Some(win) = app.get_webview_window("main") {
                     win.open_devtools();
                 }

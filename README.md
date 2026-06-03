@@ -47,7 +47,7 @@ npm run build
 
 輸出目錄為 `dist`。
 
-## 封裝成單一執行檔（Windows）
+## 封裝成桌面版（Windows）
 
 1. 先確認已安裝 `Rust（系統程式語言工具鏈）` 與 Windows 編譯工具
 2. 執行：
@@ -57,10 +57,12 @@ npm run tauri:build
 ```
 
 3. 產物位置（預設）：
-   - 安裝程式（`MSI（Windows 安裝格式）`）通常在 `src-tauri/target/release/bundle/msi`
-   - 單一可攜執行檔（若有啟用）通常在 `src-tauri/target/release`
+   - **安裝程式（NSIS）**：`src-tauri/target/release/bundle/nsis/` 下的 `*_setup.exe`
+   - **主程式（免安裝）**：`src-tauri/target/release/course-slide-generator.exe`
 
-> 若你想要「完全單檔免安裝」版本，可後續調整 `Tauri（桌面應用框架）` 打包目標與 `bundle（封裝）` 設定。
+> 第一次編譯可能需 5～10 分鐘，終端機出現 `warning: unused import` 只是警告，不代表失敗。  
+> 若曾卡在 `Building 590/591`，代表 Rust 快編完了，接著才會做安裝檔封裝。  
+> 本專案預設改為 **NSIS** 安裝檔（避開部分環境下 WiX `light.exe` 製作 MSI 失敗）。若要 MSI，可執行：`npx tauri build --bundles msi`
 
 ## 常用指令
 

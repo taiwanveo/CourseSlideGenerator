@@ -127,7 +127,7 @@ function Measurer({
                 style={{
                   display: "flex",
                   gap: 18,
-                  marginBottom: element.style.itemGap ?? 16,
+                  marginBottom: i === element.items.length - 1 ? 0 : element.style.itemGap ?? 16,
                   alignItems: "baseline",
                 }}
               >

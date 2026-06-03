@@ -1,12 +1,14 @@
 import type { CSSProperties } from "react";
 import type {
   Element,
+  ElementAnimation,
   ListElement,
   RichText,
   ShapeElement,
   TextElement,
   TextStyle,
 } from "../model/types";
+import { getMotionPreset } from "../engine/motion/catalog";
 import type { AssetMap } from "./assets";
 import { resolveAssetSrc } from "./assets";
 import { ChartView } from "./ChartView";
@@ -15,6 +17,7 @@ import { TableView } from "./TableView";
 interface Props {
   element: Element;
   assets: AssetMap;
+  playAnimations?: boolean;
 }
 
 function transformStyle(el: Element): CSSProperties {
@@ -28,6 +31,56 @@ function transformStyle(el: Element): CSSProperties {
     transform: t.rotation ? `rotate(${t.rotation}deg)` : undefined,
     opacity: el.hidden ? 0 : t.opacity,
     zIndex: t.zIndex,
+  };
+}
+
+function animationStyle(el: Element, playAnimations: boolean): CSSProperties {
+  if (!playAnimations) return {};
+  const enter = el.animations.find((a) => a.kind === "enter");
+  const emphasis = el.animations.find((a) => a.kind === "emphasis");
+  if (!enter && !emphasis) return {};
+
+  const names: string[] = [];
+  const durations: string[] = [];
+  const easings: string[] = [];
+  const delays: string[] = [];
+
+  const pushTrack = (a: ElementAnimation, delayOverride?: number) => {
+    const preset = getMotionPreset(a.preset);
+    const duration = Math.max(80, a.duration || preset?.defaultDuration || 600);
+    const easing = a.easing || preset?.defaultEasing || "ease";
+    const delay = Math.min(4000, Math.max(0, (delayOverride ?? a.delay) || 0));
+    names.push(`csg-${a.preset}`);
+    durations.push(`${duration}ms`);
+    easings.push(easing);
+    delays.push(`${delay}ms`);
+  };
+
+  if (enter) pushTrack(enter);
+  if (emphasis) {
+    const enterDuration = enter
+      ? Math.max(80, enter.duration || getMotionPreset(enter.preset)?.defaultDuration || 600)
+      : 0;
+    const enterDelay = enter ? Math.max(0, enter.delay || 0) : 0;
+    const chainedDelay = enterDelay + enterDuration + Math.max(0, emphasis.delay || 0);
+    pushTrack(emphasis, chainedDelay);
+  }
+
+  const usesTransform =
+    (enter && ["fade-up", "scale-in", "slide-left"].includes(enter.preset)) ||
+    (emphasis && ["pulse", "shake", "bounce"].includes(emphasis.preset));
+
+  return {
+    width: "100%",
+    height: "100%",
+    animationName: names.join(", "),
+    animationDuration: durations.join(", "),
+    animationTimingFunction: easings.join(", "),
+    animationDelay: delays.join(", "),
+    animationIterationCount: names.map(() => "1").join(", "),
+    animationFillMode: names.map(() => "both").join(", "),
+    transformOrigin: usesTransform ? "center center" : undefined,
+    willChange: "transform, opacity, filter, clip-path",
   };
 }
 
@@ -62,6 +115,9 @@ function renderRich(rt: RichText) {
 
 function TextInner({ el }: { el: TextElement }) {
   const valign = el.style.valign ?? "top";
+  const content = <div>{renderRich(el.content)}</div>;
+  const legacyHref = (el as unknown as { href?: string }).href;
+  const link = el.link ?? (legacyHref ? { kind: "url" as const, value: legacyHref, target: "blank" as const } : undefined);
   return (
     <div
       style={{
@@ -77,7 +133,25 @@ function TextInner({ el }: { el: TextElement }) {
         overflow: "hidden",
       }}
     >
-      <div>{renderRich(el.content)}</div>
+      {link ? (
+        <a
+          href={link.kind === "url" ? link.value : "#"}
+          target={link.kind === "url" ? (link.target === "self" ? "_self" : "_blank") : undefined}
+          rel="noreferrer"
+          data-csg-link="1"
+          data-csg-link-kind={link.kind}
+          data-csg-link-value={link.value}
+          onClick={(e) => {
+            if (link.kind === "slide") e.preventDefault();
+            e.stopPropagation();
+          }}
+          style={{ color: "inherit", textDecoration: "underline" }}
+        >
+          {content}
+        </a>
+      ) : (
+        content
+      )}
     </div>
   );
 }
@@ -101,7 +175,7 @@ function ListInner({ el }: { el: ListElement }) {
             style={{
               display: "flex",
               gap: 18,
-              marginBottom: gap,
+              marginBottom: i === el.items.length - 1 ? 0 : gap,
               alignItems: "baseline",
             }}
           >
@@ -182,7 +256,7 @@ function ShapeInner({ el }: { el: ShapeElement }) {
   );
 }
 
-export function ElementView({ element, assets }: Props) {
+export function ElementView({ element, assets, playAnimations = false }: Props) {
   if (element.type === "audio") return null;
 
   let inner: React.ReactNode = null;
@@ -259,12 +333,19 @@ export function ElementView({ element, assets }: Props) {
       inner = (
         <div style={{ position: "absolute", inset: 0 }}>
           {element.children.map((child) => (
-            <ElementView key={child.id} element={child} assets={assets} />
+            <ElementView key={child.id} element={child} assets={assets} playAnimations={playAnimations} />
           ))}
         </div>
       );
       break;
   }
 
-  return <div style={transformStyle(element)}>{inner}</div>;
+  const animStyle = animationStyle(element, playAnimations);
+  const hasAnim = Object.keys(animStyle).length > 0;
+
+  return (
+    <div style={transformStyle(element)}>
+      {hasAnim ? <div style={animStyle}>{inner}</div> : inner}
+    </div>
+  );
 }

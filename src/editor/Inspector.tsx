@@ -49,6 +49,7 @@ function ColorField({
 
 function TextInspector({ el }: { el: TextElement }) {
   const updateElement = useEditor((s) => s.updateElement);
+  const slides = useEditor((s) => s.project.deck.slides);
   const text = el.content.spans.map((s) => s.text).join("");
   return (
     <>
@@ -63,6 +64,68 @@ function TextInspector({ el }: { el: TextElement }) {
             })
           }
         />
+        <div style={{ display: "grid", gap: 6, marginTop: 8 }}>
+          <label style={{ fontSize: 11, color: "var(--app-muted)" }}>超連結類型</label>
+          <select
+            className="csg-select"
+            value={el.link?.kind ?? "none"}
+            onChange={(e) =>
+              updateElement(el.id, (x) => {
+                if (x.type !== "text") return;
+                if (e.target.value === "none") x.link = undefined;
+                else if (e.target.value === "url") x.link = { kind: "url", value: "", target: "blank" };
+                else x.link = { kind: "slide", value: slides[0]?.id ?? "" };
+              })
+            }
+          >
+            <option value="none">無</option>
+            <option value="url">網址</option>
+            <option value="slide">頁內跳轉</option>
+          </select>
+          {el.link?.kind === "url" && (
+            <>
+              <input
+                className="csg-input"
+                placeholder="https://example.com"
+                value={el.link.value}
+                onChange={(e) =>
+                  updateElement(el.id, (x) => {
+                    if (x.type === "text" && x.link?.kind === "url") x.link.value = e.target.value.trim();
+                  })
+                }
+              />
+              <select
+                className="csg-select"
+                value={el.link.target ?? "blank"}
+                onChange={(e) =>
+                  updateElement(el.id, (x) => {
+                    if (x.type === "text" && x.link?.kind === "url") x.link.target = e.target.value as "self" | "blank";
+                  })
+                }
+              >
+                <option value="blank">新分頁開啟</option>
+                <option value="self">同分頁開啟</option>
+              </select>
+            </>
+          )}
+          {el.link?.kind === "slide" && (
+            <select
+              className="csg-select"
+              value={el.link.value}
+              onChange={(e) =>
+                updateElement(el.id, (x) => {
+                  if (x.type === "text" && x.link?.kind === "slide") x.link.value = e.target.value;
+                })
+              }
+            >
+              {slides.map((s, i) => (
+                <option key={s.id} value={s.id}>
+                  第 {i + 1} 頁
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
       </Section>
       <Section title="樣式">
         <div style={{ display: "flex", gap: 8 }}>
@@ -314,6 +377,7 @@ function ImageInspector({ el }: { el: ImageElement }) {
 
 function AnimationInspector({ el }: { el: Element }) {
   const updateElement = useEditor((s) => s.updateElement);
+  const previewElementAnimation = useEditor((s) => s.previewElementAnimation);
 
   const enterAnim = el.animations.find((a) => a.kind === "enter");
   const emphasisAnim = el.animations.find((a) => a.kind === "emphasis");
@@ -364,6 +428,9 @@ function AnimationInspector({ el }: { el: Element }) {
   return (
     <Section title="動畫">
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <button className="csg-btn-sm" onClick={() => previewElementAnimation(el.id)}>
+          預覽動畫
+        </button>
         {/* 進場動效 */}
         <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
           <span style={{ fontSize: 11, color: "var(--app-muted)" }}>進場動效</span>

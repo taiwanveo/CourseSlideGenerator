@@ -31,8 +31,16 @@ export function exportHtml(project: Project): string {
 <style>
   * { margin: 0; box-sizing: border-box; }
   html, body { height: 100%; background: #000; overflow: hidden; font-family: system-ui, sans-serif; }
-  #stage { position: fixed; inset: 0; display: grid; place-items: center; }
-  .csg-deck { position: relative; width: ${CANVAS_WIDTH}px; height: ${CANVAS_HEIGHT}px; transform-origin: center; }
+  #stage { position: fixed; inset: 0; overflow: hidden; }
+  .csg-deck {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: ${CANVAS_WIDTH}px;
+    height: ${CANVAS_HEIGHT}px;
+    transform: translate(-50%, -50%) scale(1);
+    transform-origin: center center;
+  }
   .csg-slide { position: absolute; inset: 0; opacity: 0; pointer-events: none; transition: opacity .5s ease; }
   .csg-slide.active { opacity: 1; pointer-events: auto; }
   .csg-nav { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
@@ -55,7 +63,7 @@ export function exportHtml(project: Project): string {
     var idx = 0;
     function fit(){
       var s = Math.min(window.innerWidth/${CANVAS_WIDTH}, window.innerHeight/${CANVAS_HEIGHT});
-      deck.style.transform = 'scale('+s+')';
+      deck.style.transform = 'translate(-50%, -50%) scale(' + s + ')';
     }
     function show(n){
       idx = Math.max(0, Math.min(slides.length-1, n));

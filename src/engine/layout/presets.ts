@@ -89,7 +89,7 @@ export const PRESETS: LayoutPreset[] = [
         accepts: ["text"],
         required: true,
         align: "center",
-        frame: { x: M, y: 90, width: contentW, height: 150 },
+        frame: { x: M, y: 90, width: contentW, height: 220 },
       },
       {
         name: "image",
@@ -224,7 +224,7 @@ export const PRESETS: LayoutPreset[] = [
         accepts: ["text"],
         required: true,
         align: "left",
-        frame: { x: M, y: 130, width: contentW, height: 150 },
+        frame: { x: M, y: 130, width: contentW, height: 220 },
       },
       {
         name: "bullets",
@@ -248,7 +248,7 @@ export const PRESETS: LayoutPreset[] = [
         accepts: ["text"],
         required: true,
         align: "left",
-        frame: { x: M, y: 130, width: contentW, height: 150 },
+        frame: { x: M, y: 130, width: contentW, height: 220 },
       },
       {
         name: "bullets",
@@ -272,7 +272,7 @@ export const PRESETS: LayoutPreset[] = [
         accepts: ["text"],
         required: true,
         align: "left",
-        frame: { x: M, y: 130, width: contentW, height: 150 },
+        frame: { x: M, y: 130, width: contentW, height: 220 },
       },
       {
         name: "left",
@@ -548,7 +548,7 @@ export const PRESETS: LayoutPreset[] = [
         accepts: ["text"],
         required: true,
         align: "left",
-        frame: { x: M, y: 130, width: contentW, height: 150 },
+        frame: { x: M, y: 130, width: contentW, height: 220 },
       },
       {
         name: "steps",
@@ -572,7 +572,7 @@ export const PRESETS: LayoutPreset[] = [
         accepts: ["text"],
         required: true,
         align: "left",
-        frame: { x: M, y: 130, width: contentW, height: 150 },
+        frame: { x: M, y: 130, width: contentW, height: 220 },
       },
       {
         name: "events",

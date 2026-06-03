@@ -1,6 +1,4 @@
-import { useMemo, useState } from "react";
-import { TRANSITION_PRESETS } from "../engine/motion/catalog";
-import { THEMES } from "../engine/themes/themes";
+import { useEffect, useRef, useState } from "react";
 import type { OutlineNode } from "../model/types";
 import { CANVAS_HEIGHT, CANVAS_WIDTH } from "../model/types";
 import { buildAssetMap } from "../renderer/assets";
@@ -14,18 +12,30 @@ export function SlidePanel() {
   const project = useEditor((s) => s.project);
   const currentId = useEditor((s) => s.currentSlideId);
   const selectSlide = useEditor((s) => s.selectSlide);
+  const setSlideSelection = useEditor((s) => s.setSlideSelection);
+  const toggleSlideSelection = useEditor((s) => s.toggleSlideSelection);
+  const selectSlideRangeTo = useEditor((s) => s.selectSlideRangeTo);
+  const selectAllSlides = useEditor((s) => s.selectAllSlides);
+  const selectedSlideIds = useEditor((s) => s.selectedSlideIds);
   const addSlide = useEditor((s) => s.addSlide);
   const deleteSlide = useEditor((s) => s.deleteSlide);
-  const moveSlide = useEditor((s) => s.moveSlide);
-  const applyThemeToSlides = useEditor((s) => s.applyThemeToSlides);
-  const applyTransitionToSlides = useEditor((s) => s.applyTransitionToSlides);
+  const deleteSlides = useEditor((s) => s.deleteSlides);
+  const moveSlideToIndex = useEditor((s) => s.moveSlideToIndex);
   const assets = buildAssetMap(project.assets);
   const scale = THUMB_W / CANVAS_WIDTH;
-  const [selectedSlides, setSelectedSlides] = useState<string[]>([]);
-  const [batchThemeId, setBatchThemeId] = useState(project.theme.id);
-  const [batchTransition, setBatchTransition] = useState("crossfade");
-  const revealThemes = useMemo(() => THEMES.filter((t) => t.id.startsWith("reveal-")), []);
-  const customThemes = useMemo(() => THEMES.filter((t) => !t.id.startsWith("reveal-")), []);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const thumbRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const dragStateRef = useRef<{
+    slideId: string;
+    startX: number;
+    startY: number;
+    moved: boolean;
+  } | null>(null);
+  const suppressClickRef = useRef(false);
+  const [hoveredSlideId, setHoveredSlideId] = useState<string | null>(null);
+  const [draggingSlideId, setDraggingSlideId] = useState<string | null>(null);
+  const [dragOverSlideId, setDragOverSlideId] = useState<string | null>(null);
+  const [dragInsertSide, setDragInsertSide] = useState<"before" | "after">("before");
   const outline = project.source.outline;
   const slideTextIndex = project.deck.slides.map((slide) => {
     const texts: string[] = [];
@@ -45,12 +55,88 @@ export function SlidePanel() {
     return hit >= 0 ? project.deck.slides[hit]!.id : null;
   };
 
-  const toggleSlideSelection = (slideId: string, additive: boolean) => {
-    setSelectedSlides((prev) => {
-      if (!additive) return [slideId];
-      return prev.includes(slideId) ? prev.filter((x) => x !== slideId) : [...prev, slideId];
-    });
-  };
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const active = document.activeElement as HTMLElement | null;
+      const isInput = active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.isContentEditable);
+      if (isInput) return;
+      const panelActive = !!(active && panelRef.current?.contains(active));
+      const panelHot = panelActive || hoveredSlideId !== null;
+      if (!panelHot) return;
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") {
+        e.preventDefault();
+        selectAllSlides();
+        return;
+      }
+      if (e.key === "Delete" || e.key === "Backspace") {
+        if (selectedSlideIds.length === 0) return;
+        const total = project.deck.slides.length;
+        if (total - selectedSlideIds.length < 1) return;
+        e.preventDefault();
+        deleteSlides(selectedSlideIds);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [deleteSlides, hoveredSlideId, project.deck.slides.length, selectAllSlides, selectedSlideIds]);
+
+  useEffect(() => {
+    const updateDragTarget = (clientY: number) => {
+      const entries = project.deck.slides
+        .map((s) => ({ id: s.id, el: thumbRefs.current[s.id] }))
+        .filter((x): x is { id: string; el: HTMLDivElement } => !!x.el);
+      for (const item of entries) {
+        const rect = item.el.getBoundingClientRect();
+        if (clientY >= rect.top && clientY <= rect.bottom) {
+          setDragOverSlideId(item.id);
+          setDragInsertSide(clientY < rect.top + rect.height / 2 ? "before" : "after");
+          return;
+        }
+      }
+    };
+
+    const onPointerMove = (e: PointerEvent) => {
+      const drag = dragStateRef.current;
+      if (!drag) return;
+      const dx = Math.abs(e.clientX - drag.startX);
+      const dy = Math.abs(e.clientY - drag.startY);
+      if (!drag.moved && (dx > 3 || dy > 3)) {
+        drag.moved = true;
+        suppressClickRef.current = true;
+      }
+      if (!drag.moved) return;
+      setDraggingSlideId(drag.slideId);
+      updateDragTarget(e.clientY);
+    };
+
+    const onPointerUp = () => {
+      const drag = dragStateRef.current;
+      if (!drag) return;
+      if (drag.moved && dragOverSlideId) {
+        const fromIndex = project.deck.slides.findIndex((x) => x.id === drag.slideId);
+        const targetIndex = project.deck.slides.findIndex((x) => x.id === dragOverSlideId);
+        if (fromIndex >= 0 && targetIndex >= 0) {
+          let desired = dragInsertSide === "after" ? targetIndex + 1 : targetIndex;
+          if (fromIndex < desired) desired -= 1;
+          moveSlideToIndex(drag.slideId, desired);
+        }
+      }
+      dragStateRef.current = null;
+      setDraggingSlideId(null);
+      setDragOverSlideId(null);
+      setDragInsertSide("before");
+      window.setTimeout(() => {
+        suppressClickRef.current = false;
+      }, 0);
+    };
+
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+    };
+  }, [dragInsertSide, dragOverSlideId, moveSlideToIndex, project.deck.slides]);
 
   return (
     <div
@@ -93,49 +179,45 @@ export function SlidePanel() {
           />
         </div>
       )}
-      <div style={{ borderBottom: "1px solid var(--app-border)", padding: "10px 12px", display: "grid", gap: 6 }}>
-        <div style={{ fontSize: 11, color: "var(--app-muted)", textTransform: "uppercase" }}>
-          批次頁面操作（已選 {selectedSlides.length}）
-        </div>
-        <select className="csg-select" value={batchThemeId} onChange={(e) => setBatchThemeId(e.target.value)}>
-          <optgroup label="原創主題">
-            {customThemes.map((t) => <option key={t.id} value={t.id}>{t.nameZh}</option>)}
-          </optgroup>
-          <optgroup label="Reveal.js">
-            {revealThemes.map((t) => <option key={t.id} value={t.id}>{t.nameZh}</option>)}
-          </optgroup>
-        </select>
-        <button
-          className="csg-btn-sm"
-          disabled={selectedSlides.length === 0}
-          onClick={() => applyThemeToSlides(selectedSlides, batchThemeId)}
-        >
-          套用主題到已選頁
-        </button>
-        <select className="csg-select" value={batchTransition} onChange={(e) => setBatchTransition(e.target.value)}>
-          {TRANSITION_PRESETS.map((p) => <option key={p.id} value={p.id}>{p.nameZh}</option>)}
-        </select>
-        <button
-          className="csg-btn-sm"
-          disabled={selectedSlides.length === 0}
-          onClick={() => applyTransitionToSlides(selectedSlides, batchTransition)}
-        >
-          套用轉場到已選頁
-        </button>
-      </div>
-      <div style={{ overflowY: "auto", padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
+      <div ref={panelRef} tabIndex={0} style={{ overflowY: "auto", padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
         {project.deck.slides.map((slide, i) => {
           const active = slide.id === currentId;
+          const selected = selectedSlideIds.includes(slide.id);
           return (
             <div key={slide.id} style={{ position: "relative" }}>
               <div
-                onClick={() => {
-                  selectSlide(slide.id);
-                  toggleSlideSelection(slide.id, false);
-                  document.getElementById("editor-canvas")?.focus();
+                ref={(el) => {
+                  thumbRefs.current[slide.id] = el;
                 }}
-                onMouseDown={(e) => {
-                  if (e.ctrlKey || e.metaKey) toggleSlideSelection(slide.id, true);
+                onPointerDown={(e) => {
+                  if (e.button !== 0) return;
+                  dragStateRef.current = {
+                    slideId: slide.id,
+                    startX: e.clientX,
+                    startY: e.clientY,
+                    moved: false,
+                  };
+                  setDragOverSlideId(slide.id);
+                  setDragInsertSide("before");
+                }}
+                onMouseEnter={() => setHoveredSlideId(slide.id)}
+                onMouseLeave={() => setHoveredSlideId((prev) => (prev === slide.id ? null : prev))}
+                onClick={(e) => {
+                  if (suppressClickRef.current) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return;
+                  }
+                  panelRef.current?.focus();
+                  if (e.shiftKey) {
+                    selectSlideRangeTo(slide.id);
+                  } else if (e.ctrlKey || e.metaKey) {
+                    toggleSlideSelection(slide.id);
+                  } else {
+                    selectSlide(slide.id);
+                    setSlideSelection([slide.id], slide.id);
+                  }
+                  document.getElementById("editor-canvas")?.focus();
                 }}
                 style={{
                   width: THUMB_W,
@@ -143,18 +225,35 @@ export function SlidePanel() {
                   borderRadius: 8,
                   overflow: "hidden",
                   cursor: "pointer",
-                  outline: selectedSlides.includes(slide.id)
+                  outline: selected
                     ? "2px solid var(--app-accent)"
                     : active
                       ? "2px solid var(--accent, #ff4a2b)"
                       : "1px solid var(--app-border)",
+                  boxShadow: dragOverSlideId === slide.id ? "0 0 0 2px rgba(120,170,255,.65) inset" : undefined,
                   position: "relative",
                   background: "#000",
+                  opacity: draggingSlideId === slide.id ? 0.65 : 1,
                 }}
               >
                 <div style={{ transform: `scale(${scale})`, transformOrigin: "top left", pointerEvents: "none" }}>
                   <SlideStage slide={slide} theme={project.theme} assets={assets} />
                 </div>
+                {dragOverSlideId === slide.id && (
+                  <div
+                    style={{
+                      position: "absolute",
+                      left: 0,
+                      right: 0,
+                      height: 0,
+                      borderTop: "2px solid #6fb0ff",
+                      top: dragInsertSide === "before" ? 0 : undefined,
+                      bottom: dragInsertSide === "after" ? 0 : undefined,
+                      boxShadow: "0 0 0 1px rgba(111,176,255,.25)",
+                      pointerEvents: "none",
+                    }}
+                  />
+                )}
                 <span
                   style={{
                     position: "absolute",
@@ -169,20 +268,36 @@ export function SlidePanel() {
                 >
                   {i + 1}
                 </span>
+                {hoveredSlideId === slide.id && (
+                  <>
+                    <button
+                      className="csg-btn-sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        deleteSlide(slide.id);
+                      }}
+                      disabled={project.deck.slides.length <= 1}
+                      title="刪除這一頁"
+                      style={{
+                        position: "absolute",
+                        top: 6,
+                        right: 6,
+                        minWidth: 22,
+                        width: 22,
+                        height: 22,
+                        padding: 0,
+                        borderRadius: 999,
+                        border: "1px solid rgba(255,100,100,.85)",
+                        background: "rgba(220,40,40,.95)",
+                        color: "#fff",
+                        fontWeight: 700,
+                      }}
+                    >
+                      ×
+                    </button>
+                  </>
+                )}
               </div>
-              {active && (
-                <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
-                  <button className="csg-btn-sm" onClick={() => moveSlide(slide.id, -1)}>↑</button>
-                  <button className="csg-btn-sm" onClick={() => moveSlide(slide.id, 1)}>↓</button>
-                  <button
-                    className="csg-btn-sm"
-                    onClick={() => deleteSlide(slide.id)}
-                    disabled={project.deck.slides.length <= 1}
-                  >
-                    刪
-                  </button>
-                </div>
-              )}
             </div>
           );
         })}

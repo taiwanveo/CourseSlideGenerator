@@ -157,9 +157,9 @@ function TabBtn({
         fontSize: 13,
         fontWeight: 600,
         borderRadius: 8,
-        border: "1px solid var(--app-border)",
-        background: active ? "var(--app-accent)" : "transparent",
-        color: active ? "#fff" : "var(--app-text)",
+        border: active ? "1px solid var(--app-accent)" : "1px solid var(--app-border)",
+        background: "transparent",
+        color: "var(--app-text)",
         cursor: "pointer",
       }}
     >

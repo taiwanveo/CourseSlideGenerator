@@ -19,6 +19,7 @@
     "@tauri-apps/plugin-fs": "^2.2.0",
     "@tauri-apps/plugin-http": "^2.2.0",
     "@tauri-apps/plugin-sql": "^2.2.0",
+    "html-to-image": "^1.11.13",
     "immer": "^10.1.1",
     "mammoth": "^1.8.0",
     "nanoid": "^5.0.9",

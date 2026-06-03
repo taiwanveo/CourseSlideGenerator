@@ -25,6 +25,8 @@ import { FALLBACK_PRESET_ID, getPreset } from "./presets";
 
 export interface TranslateContext {
   motionDefaults: MotionDefaults;
+  /** 圖片資產尺寸，用於等比縮放至槽位內 */
+  imageAssets?: Record<string, { width?: number; height?: number }>;
 }
 
 function enterAnim(preset: string, delay: number): ElementAnimation {
@@ -46,7 +48,7 @@ function styleForRole(role: SlotRole, align: TextStyle["align"]): TextStyle {
     fontSize,
     color: role === "label" ? "var(--accent)" : "var(--text)",
     align,
-    lineHeight: heavy ? 1.08 : role === "bullets" ? 1.5 : 1.3,
+    lineHeight: heavy ? 1.22 : role === "bullets" ? 1.5 : 1.35,
     fontWeight: heavy ? 700 : role === "subtitle" ? 600 : 400,
     valign: role === "bignumber" || role === "quote" ? "middle" : "top",
   };
@@ -61,6 +63,7 @@ function buildElementFromFill(
   slot: SlotDef,
   zIndex: number,
   enterPreset: string,
+  imageAssets?: Record<string, { width?: number; height?: number }>,
 ): Element | null {
   const frame = slot.frame;
   const align = slot.align ?? "left";
@@ -77,14 +80,15 @@ function buildElementFromFill(
 
   // 圖片
   if (slot.role === "image" || fill.contentType === "image") {
-    if (fill.contentType === "image") {
+    if (fill.contentType === "image" && fill.imageAssetId) {
+      const transform = layoutImageContain(frame, fill.imageAssetId, imageAssets);
       return {
         id: newId("img"),
         type: "image",
-        transform: baseTransform,
+        transform: { ...transform, rotation: 0, zIndex, opacity: 1 },
         animations: anim,
-        assetId: fill.imageAssetId ?? "__placeholder__",
-        fit: "cover",
+        assetId: fill.imageAssetId,
+        fit: "contain",
         cornerRadius: 16,
       };
     }
@@ -151,7 +155,7 @@ export function translateIntentToSlide(
   for (const fill of intent.slots) {
     const slot = findSlotDef(preset, fill.slotName);
     if (!slot) continue;
-    const el = buildElementFromFill(fill, slot, z, ctx.motionDefaults.enter);
+    const el = buildElementFromFill(fill, slot, z, ctx.motionDefaults.enter, ctx.imageAssets);
     if (el) {
       elements.push(el);
       z += 1;
@@ -167,11 +171,15 @@ export function translateIntentToSlide(
       titleSlot,
       z,
       ctx.motionDefaults.enter,
+      ctx.imageAssets,
     );
     if (el) elements.push(el);
   }
 
   applyEmphasis(elements, intent.emphasisPoints, ctx.motionDefaults.emphasis);
+
+  fitTextElementHeights(elements);
+  reflowVerticalStack(elements);
 
   const transition = getMotionPreset(ctx.motionDefaults.transition);
   return {
@@ -193,4 +201,85 @@ export function translateDeck(
   ctx: TranslateContext,
 ): Slide[] {
   return intents.map((i) => translateIntentToSlide(i, ctx));
+}
+
+function charsPerLine(width: number, fontSize: number): number {
+  return Math.max(1, Math.floor(width / Math.max(1, fontSize * 0.92)));
+}
+
+function estimateWrappedLines(text: string, width: number, fontSize: number): number {
+  const parts = text.split(/\n/);
+  let lines = 0;
+  for (const part of parts) {
+    const len = part.trim().length;
+    lines += len === 0 ? 0 : Math.ceil(len / charsPerLine(width, fontSize));
+  }
+  return Math.max(1, lines);
+}
+
+function fitTextElementHeights(elements: Element[]): void {
+  for (const el of elements) {
+    if (el.type === "text") {
+      const text = el.content.spans.map((s) => s.text).join("");
+      const { fontSize, lineHeight } = el.style;
+      let size = fontSize;
+      let lines = estimateWrappedLines(text, el.transform.width, size);
+      let needed = Math.ceil(lines * size * lineHeight + 6);
+      while (needed > el.transform.height && size > 52) {
+        size -= 4;
+        el.style.fontSize = size;
+        lines = estimateWrappedLines(text, el.transform.width, size);
+        needed = Math.ceil(lines * size * lineHeight + 6);
+      }
+      if (needed > el.transform.height) {
+        el.transform.height = needed;
+      }
+    } else if (el.type === "list") {
+      const { fontSize, lineHeight, itemGap = 16 } = el.style;
+      let total = 0;
+      for (let i = 0; i < el.items.length; i++) {
+        const itemText = el.items[i]!.spans.map((s) => s.text).join("");
+        const lines = estimateWrappedLines(itemText, el.transform.width - 48, fontSize);
+        total += lines * fontSize * lineHeight + (i < el.items.length - 1 ? itemGap : 0);
+      }
+      const needed = Math.ceil(total + 8);
+      if (needed > el.transform.height) {
+        el.transform.height = needed;
+      }
+    }
+  }
+}
+
+/** 依原圖比例縮放至槽位內（contain），置中，不裁切。 */
+function layoutImageContain(
+  frame: { x: number; y: number; width: number; height: number },
+  assetId: string,
+  imageAssets?: Record<string, { width?: number; height?: number }>,
+): { x: number; y: number; width: number; height: number } {
+  const meta = imageAssets?.[assetId];
+  if (!meta?.width || !meta?.height || meta.width <= 0 || meta.height <= 0) {
+    return { x: frame.x, y: frame.y, width: frame.width, height: frame.height };
+  }
+  const scale = Math.min(frame.width / meta.width, frame.height / meta.height);
+  const w = Math.max(1, Math.round(meta.width * scale));
+  const h = Math.max(1, Math.round(meta.height * scale));
+  return {
+    x: frame.x + Math.round((frame.width - w) / 2),
+    y: frame.y + Math.round((frame.height - h) / 2),
+    width: w,
+    height: h,
+  };
+}
+
+/** 依 y 排序後，避免上方元件加高後與下方重疊。 */
+function reflowVerticalStack(elements: Element[]): void {
+  const sorted = [...elements].sort((a, b) => a.transform.y - b.transform.y);
+  for (let i = 1; i < sorted.length; i++) {
+    const prev = sorted[i - 1]!;
+    const cur = sorted[i]!;
+    const minY = prev.transform.y + prev.transform.height + 24;
+    if (cur.transform.y < minY) {
+      cur.transform.y = minY;
+    }
+  }
 }

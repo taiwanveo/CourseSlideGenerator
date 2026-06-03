@@ -36,8 +36,22 @@ export function ExportPanel({ onClose, getStageNode }: Props) {
     }
   };
 
+  const projectJsonExport = (
+    <ExportRow
+      compact
+      label="專案 JSON"
+      desc="備份完整物件樹，可日後重新載入"
+      busy={busy === "json"}
+      onClick={() =>
+        run("json", async () => {
+          await downloadText(JSON.stringify(project, null, 2), `${safeName}.json`, "application/json");
+        })
+      }
+    />
+  );
+
   return (
-    <Modal title="匯出簡報" onClose={onClose}>
+    <Modal title="匯出簡報" headerExtra={projectJsonExport} onClose={onClose}>
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         <ExportRow
           label="互動式 HTML"
@@ -45,7 +59,7 @@ export function ExportPanel({ onClose, getStageNode }: Props) {
           busy={busy === "html"}
           onClick={() =>
             run("html", async () => {
-              downloadText(exportHtml(project), `${safeName}.html`, "text/html");
+              await downloadText(exportHtml(project), `${safeName}.html`, "text/html");
             })
           }
         />
@@ -56,7 +70,7 @@ export function ExportPanel({ onClose, getStageNode }: Props) {
           onClick={() =>
             run("pptx", async () => {
               const blob = await exportPptx(project);
-              downloadBlob(blob, `${safeName}.pptx`);
+              await downloadBlob(blob, `${safeName}.pptx`);
             })
           }
         />
@@ -67,9 +81,10 @@ export function ExportPanel({ onClose, getStageNode }: Props) {
           onClick={() =>
             run("png", async () => {
               const node = getStageNode();
-              if (!node) throw new Error("找不到舞台節點");
+              if (!node) throw new Error("匯出舞台尚未就緒，請稍候再試");
+              await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
               const blob = await nodeToPng(node, 1);
-              downloadBlob(blob, `${safeName}.png`);
+              await downloadBlob(blob, `${safeName}.png`);
             })
           }
         />
@@ -80,42 +95,43 @@ export function ExportPanel({ onClose, getStageNode }: Props) {
           onClick={() =>
             run("notes", async () => {
               const notesMd = await buildSpeakerNotes(project, settings.credentials());
-              downloadText(notesMd, `${safeName}-speaker-notes.md`, "text/markdown");
+              await downloadText(notesMd, `${safeName}-speaker-notes.md`, "text/markdown");
             })
           }
         />
-        <ExportRow
-          label="品質報告 JSON"
-          desc="匯出覆蓋率與品質檢查摘要"
-          busy={busy === "quality"}
-          onClick={() =>
-            run("quality", async () => {
-              const payload = {
-                generatedAt: new Date().toISOString(),
-                coverage: project.source.coverage ?? null,
-                quality: project.source.quality ?? null,
-              };
-              downloadText(JSON.stringify(payload, null, 2), `${safeName}-quality-report.json`, "application/json");
-            })
-          }
-        />
-        <ExportRow
-          label="專案 JSON"
-          desc="備份完整物件樹，可日後重新載入"
-          busy={busy === "json"}
-          onClick={() =>
-            run("json", async () => {
-              downloadText(JSON.stringify(project, null, 2), `${safeName}.json`, "application/json");
-            })
-          }
-        />
+        <div style={{ display: "flex", alignItems: "stretch", gap: 10 }}>
+          <div style={{ width: "75%", minWidth: 0 }}>
+            <ExportRow
+              label="品質報告"
+              desc="匯出覆蓋率與品質檢查摘要"
+              busy={busy === "quality"}
+              onClick={() =>
+                run("quality", async () => {
+                  const payload = {
+                    generatedAt: new Date().toISOString(),
+                    coverage: project.source.coverage ?? null,
+                    quality: project.source.quality ?? null,
+                  };
+                  await downloadText(
+                    JSON.stringify(payload, null, 2),
+                    `${safeName}-quality-report.json`,
+                    "application/json",
+                  );
+                })
+              }
+            />
+          </div>
+          <button
+            className="csg-btn"
+            type="button"
+            onClick={onClose}
+            style={{ flexShrink: 0, alignSelf: "center" }}
+          >
+            關閉
+          </button>
+        </div>
       </div>
       {error && <div style={{ color: "#ff6b6b", fontSize: 13, marginTop: 12 }}>{error}</div>}
-      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 16 }}>
-        <button className="csg-btn" onClick={onClose}>
-          關閉
-        </button>
-      </div>
     </Modal>
   );
 }
@@ -161,11 +177,13 @@ function ExportRow({
   label,
   desc,
   busy,
+  compact,
   onClick,
 }: {
   label: string;
   desc: string;
   busy: boolean;
+  compact?: boolean;
   onClick: () => void;
 }) {
   return (
@@ -177,17 +195,36 @@ function ExportRow({
         display: "flex",
         flexDirection: "column",
         alignItems: "flex-start",
-        gap: 2,
-        padding: "12px 14px",
+        gap: compact ? 1 : 2,
+        width: compact ? 290 : "100%",
+        maxWidth: compact ? 290 : undefined,
+        flexShrink: compact ? 0 : undefined,
+        padding: compact ? "6px 12px" : "12px 14px",
         background: "var(--app-canvas-bg)",
         border: "1px solid var(--app-border)",
-        borderRadius: 10,
+        borderRadius: compact ? 8 : 10,
         cursor: "pointer",
         textAlign: "left",
       }}
     >
-      <span style={{ fontSize: 14, fontWeight: 600 }}>{busy ? "處理中…" : label}</span>
-      <span style={{ fontSize: 12, color: "var(--app-muted)" }}>{desc}</span>
+      <span
+        style={{
+          fontSize: compact ? 12 : 14,
+          fontWeight: 600,
+          whiteSpace: "nowrap",
+        }}
+      >
+        {busy ? "處理中…" : label}
+      </span>
+      <span
+        style={{
+          fontSize: compact ? 9 : 12,
+          color: "var(--app-muted)",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {desc}
+      </span>
     </button>
   );
 }

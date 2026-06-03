@@ -176,6 +176,12 @@ export interface TextElement extends ElementBase {
   type: "text";
   content: RichText;
   style: TextStyle;
+  /** 超連結設定（網址連結或頁內跳轉）。 */
+  link?: {
+    kind: "url" | "slide";
+    value: string;
+    target?: "self" | "blank";
+  };
   /** 自動依內容調整邊框尺寸（如 Word 文字方塊）。僅手動新增的文字方塊啟用。 */
   autoSize?: boolean;
 }

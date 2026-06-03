@@ -13,12 +13,57 @@ import type {
   TextElement,
 } from "../../model/types";
 import { CANVAS_HEIGHT, CANVAS_WIDTH } from "../../model/types";
+import type { AssetMap } from "../../renderer/assets";
 import { buildAssetMap, resolveAssetSrc } from "../../renderer/assets";
 
 const EMU_W = 13.333;
 const EMU_H = 7.5;
 const SX = EMU_W / CANVAS_WIDTH;
 const SY = EMU_H / CANVAS_HEIGHT;
+/** design-px 字級 → PowerPoint 點（pt） */
+const DESIGN_PX_TO_PT = SX * 72;
+
+function toInX(px: number): number {
+  return px * SX;
+}
+
+function toInY(px: number): number {
+  return px * SY;
+}
+
+function toFontPt(designPx: number): number {
+  return Math.max(6, Math.round(designPx * DESIGN_PX_TO_PT));
+}
+
+/** 對應編輯器繁中字型，避免 PPT 預設字型過寬導致提早換行。 */
+function mapFontFace(fontFamily: string): string {
+  const f = fontFamily.toLowerCase();
+  if (f.includes("serif") || f.includes("noto serif")) return "Noto Serif TC";
+  if (f.includes("mono")) return "Consolas";
+  return "Microsoft JhengHei";
+}
+
+function baseTextBoxOptions(
+  el: TextElement | ListElement,
+  vars: Record<string, string>,
+  textForWrapCheck: string,
+): PptxGenJS.TextPropsOptions {
+  return {
+    x: toInX(el.transform.x),
+    y: toInY(el.transform.y),
+    w: toInX(el.transform.width),
+    h: toInY(el.transform.height),
+    fontSize: toFontPt(el.style.fontSize),
+    fontFace: mapFontFace(el.style.fontFamily),
+    color: resolveColor(el.style.color, vars),
+    align: el.style.align,
+    margin: 0,
+    fit: "none",
+    wrap: textForWrapCheck.includes("\n"),
+    lineSpacing: Math.max(6, Math.round(el.style.fontSize * el.style.lineHeight * DESIGN_PX_TO_PT)),
+    rotate: el.transform.rotation || undefined,
+  };
+}
 
 function resolveColor(value: string, vars: Record<string, string>): string {
   let v = value.trim();
@@ -54,16 +99,9 @@ function themeVars(themeId: string): Record<string, string> {
 function addText(pSlide: PptxGenJS.Slide, el: TextElement, vars: Record<string, string>) {
   const text = el.content.spans.map((s) => s.text).join("");
   pSlide.addText(text, {
-    x: el.transform.x * SX,
-    y: el.transform.y * SY,
-    w: el.transform.width * SX,
-    h: el.transform.height * SY,
-    fontSize: Math.round(el.style.fontSize * 0.5),
-    color: resolveColor(el.style.color, vars),
-    align: el.style.align,
+    ...baseTextBoxOptions(el, vars, text),
     bold: (el.style.fontWeight ?? 400) >= 600,
     valign: el.style.valign === "middle" ? "middle" : el.style.valign === "bottom" ? "bottom" : "top",
-    rotate: el.transform.rotation || undefined,
   });
 }
 
@@ -72,14 +110,9 @@ function addList(pSlide: PptxGenJS.Slide, el: ListElement, vars: Record<string, 
     text: it.spans.map((s) => s.text).join(""),
     options: { bullet: el.ordered ? { type: "number" as const } : true, breakLine: true },
   }));
+  const joined = items.map((it) => it.text).join("\n");
   pSlide.addText(items, {
-    x: el.transform.x * SX,
-    y: el.transform.y * SY,
-    w: el.transform.width * SX,
-    h: el.transform.height * SY,
-    fontSize: Math.round(el.style.fontSize * 0.5),
-    color: resolveColor(el.style.color, vars),
-    align: el.style.align,
+    ...baseTextBoxOptions(el, vars, joined),
     valign: "top",
   });
 }
@@ -104,10 +137,37 @@ function addShape(pSlide: PptxGenJS.Slide, el: ShapeElement, vars: Record<string
   });
 }
 
+function addImage(
+  pSlide: PptxGenJS.Slide,
+  el: Extract<Element, { type: "image" }>,
+  assetSrc: (id: string) => string | null,
+) {
+  const src = assetSrc(el.assetId);
+  if (!src) return;
+
+  const box = {
+    x: toInX(el.transform.x),
+    y: toInY(el.transform.y),
+    w: toInX(el.transform.width),
+    h: toInY(el.transform.height),
+  };
+
+  const opts: PptxGenJS.ImageProps = src.startsWith("data:")
+    ? { data: src, ...box }
+    : { path: src, ...box };
+
+  if (el.fit === "contain" || el.fit === "cover") {
+    opts.sizing = { type: el.fit, w: box.w, h: box.h };
+  }
+
+  pSlide.addImage(opts);
+}
+
 function addElement(
   pSlide: PptxGenJS.Slide,
   el: Element,
   vars: Record<string, string>,
+  assets: AssetMap,
   assetSrc: (id: string) => string | null,
 ) {
   switch (el.type) {
@@ -121,22 +181,11 @@ function addElement(
       addShape(pSlide, el, vars);
       break;
     case "image": {
-      const src = assetSrc(el.assetId);
-      if (src) {
-        const pos = {
-          x: el.transform.x * SX,
-          y: el.transform.y * SY,
-          w: el.transform.width * SX,
-          h: el.transform.height * SY,
-        };
-        pSlide.addImage(
-          src.startsWith("data:") ? { data: src, ...pos } : { path: src, ...pos },
-        );
-      }
+      addImage(pSlide, el, assetSrc);
       break;
     }
     case "group":
-      el.children.forEach((c) => addElement(pSlide, c, vars, assetSrc));
+      el.children.forEach((c) => addElement(pSlide, c, vars, assets, assetSrc));
       break;
     default:
       break;
@@ -156,7 +205,7 @@ export async function exportPptx(project: Project): Promise<Blob> {
     slide.elements
       .slice()
       .sort((a, b) => a.transform.zIndex - b.transform.zIndex)
-      .forEach((el) => addElement(pSlide, el, vars, (id) => resolveAssetSrc(id, assets)));
+      .forEach((el) => addElement(pSlide, el, vars, assets, (id) => resolveAssetSrc(id, assets)));
   }
 
   const out = (await pptx.write({ outputType: "blob" })) as unknown as Blob;

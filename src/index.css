@@ -11,6 +11,8 @@
   --app-accent-soft: rgba(108, 140, 255, 0.16);
   --app-muted: #9a9aa8;
   --app-canvas-bg: #0c0c0f;
+  /** 編輯畫布周圍工作區（約 80% 深灰，HSL 明度 20%），與深色主題投影片區隔 */
+  --app-editor-canvas-bg: hsl(0, 0%, 20%);
   color-scheme: dark;
 }
 

@@ -5,11 +5,13 @@ import { SlidePanel } from "../editor/SlidePanel";
 import { Toolbar } from "../editor/Toolbar";
 import { CANVAS_HEIGHT, CANVAS_WIDTH } from "../model/types";
 import { createBlankProject } from "../model/factory";
-import { buildAssetMap } from "../renderer/assets";
+import { assetsToDataUrls } from "../engine/export/image";
+import { buildAssetMap, type AssetMap } from "../renderer/assets";
 import { SlideStage } from "../renderer/SlideStage";
 import { getLastProjectId, getStore } from "../engine/storage/store";
 import { useEditor } from "../store/editorStore";
 import { ExportPanel } from "./ExportPanel";
+import { ImportPanel } from "./ImportPanel";
 import { GeneratePanel } from "./GeneratePanel";
 import { PresentationPlayer } from "./PresentationPlayer";
 import { LibraryPanel } from "./LibraryPanel";
@@ -23,6 +25,7 @@ import { isOnboardingDismissed, setOnboardingDismissed } from "./onboarding";
 export function App() {
   const [showAI, setShowAI] = useState(false);
   const [showExport, setShowExport] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [showPlayer, setShowPlayer] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
   const [showImage, setShowImage] = useState(false);
@@ -31,6 +34,7 @@ export function App() {
   const [showSnapshots, setShowSnapshots] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [restored, setRestored] = useState(false);
+  const [exportAssets, setExportAssets] = useState<AssetMap | null>(null);
   const exportStageRef = useRef<HTMLDivElement>(null);
 
   const project = useEditor((s) => s.project);
@@ -41,7 +45,6 @@ export function App() {
   const undo = useEditor((s) => s.undo);
   const redo = useEditor((s) => s.redo);
   const deleteSelected = useEditor((s) => s.deleteSelected);
-  const relayoutCurrentSlide = useEditor((s) => s.relayoutCurrentSlide);
   const selection = useEditor((s) => s.selection);
 
   // 啟動時還原最近一次的簡報
@@ -142,20 +145,33 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [undo, redo, deleteSelected, selection, project, currentSlideId, selectSlide]);
 
-  const assets = buildAssetMap(project.assets);
+  // 開啟匯出面板時，先把資產轉成 data URL 供 PNG 匯出（避免污染畫布）
+  useEffect(() => {
+    if (!showExport) {
+      setExportAssets(null);
+      return;
+    }
+    let cancelled = false;
+    void assetsToDataUrls(project.assets).then((safe) => {
+      if (!cancelled) setExportAssets(buildAssetMap(safe));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [showExport, project.assets]);
 
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <Toolbar
         onOpenAI={() => setShowAI(true)}
         onExport={() => setShowExport(true)}
+        onImport={() => setShowImport(true)}
         onNewFile={onNewFile}
         onPlay={() => setShowPlayer(true)}
         onOpenLibrary={() => setShowLibrary(true)}
         onOpenImage={() => setShowImage(true)}
         onOpenAudio={() => setShowAudio(true)}
         onOpenSettings={() => setShowSettings(true)}
-        onRelayout={() => relayoutCurrentSlide()}
         onOpenSnapshots={() => setShowSnapshots(true)}
       />
       <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
@@ -168,6 +184,7 @@ export function App() {
       {showExport && (
         <ExportPanel onClose={() => setShowExport(false)} getStageNode={() => exportStageRef.current} />
       )}
+      {showImport && <ImportPanel onClose={() => setShowImport(false)} />}
       {showPlayer && <PresentationPlayer onClose={() => setShowPlayer(false)} />}
       {showImage && <ImagePanel onClose={() => setShowImage(false)} />}
       {showAudio && <AudioPanel onClose={() => setShowAudio(false)} />}
@@ -192,21 +209,25 @@ export function App() {
         />
       )}
 
-      {/* 離螢幕全尺寸舞台 — 供 PNG 匯出 */}
-      <div
-        style={{
-          position: "fixed",
-          left: -99999,
-          top: 0,
-          width: CANVAS_WIDTH,
-          height: CANVAS_HEIGHT,
-          pointerEvents: "none",
-        }}
-      >
-        <div ref={exportStageRef}>
-          {currentSlide && <SlideStage slide={currentSlide} theme={project.theme} assets={assets} />}
+      {/* 離螢幕全尺寸舞台 — 供 PNG 匯出（僅在匯出面板開啟且資產已淨化後掛載） */}
+      {showExport && exportAssets && (
+        <div
+          style={{
+            position: "fixed",
+            left: -99999,
+            top: 0,
+            width: CANVAS_WIDTH,
+            height: CANVAS_HEIGHT,
+            pointerEvents: "none",
+          }}
+        >
+          <div ref={exportStageRef}>
+            {currentSlide && (
+              <SlideStage slide={currentSlide} theme={project.theme} assets={exportAssets} />
+            )}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

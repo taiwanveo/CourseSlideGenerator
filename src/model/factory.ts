@@ -84,7 +84,7 @@ export function createListElement(
     animations: [],
     ordered,
     items: items.map((t) => plainText(t)),
-    style: { ...baseTextStyle, fontSize: 36, lineHeight: 1.6, itemGap: 18, ...style },
+    style: { ...baseTextStyle, lineHeight: 1.6, itemGap: 18, ...style },
     autoSize: true,
   };
 }

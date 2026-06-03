@@ -16,17 +16,49 @@ export function PresentationPlayer({ onClose }: { onClose: () => void }) {
 
   const startIndex = Math.max(0, slides.findIndex((x) => x.id === startId));
   const [idx, setIdx] = useState(startIndex < 0 ? 0 : startIndex);
+  const [prevIdx, setPrevIdx] = useState<number | null>(null);
+  /** 每次換頁遞增，強制轉場層 remount 以重播 CSS animation */
+  const [transitionSeq, setTransitionSeq] = useState(0);
+  /** 每次索引變更都遞增，確保元件進場動畫可重播。 */
+  const [elementAnimSeq, setElementAnimSeq] = useState(0);
   const [scale, setScale] = useState(1);
   const [controlsVisible, setControlsVisible] = useState(true);
   const hideTimer = useRef<number | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  const clearPrevTimer = useRef<number | null>(null);
+
+  const navigateToIndex = useCallback((next: number) => {
+    setIdx((i) => {
+      if (next === i) return i;
+      setPrevIdx(i);
+      setTransitionSeq((s) => s + 1);
+      return next;
+    });
+  }, []);
 
   const go = useCallback(
     (dir: -1 | 1) => {
-      setIdx((i) => Math.max(0, Math.min(slides.length - 1, i + dir)));
+      setIdx((i) => {
+        const next = Math.max(0, Math.min(slides.length - 1, i + dir));
+        if (next !== i) {
+          setPrevIdx(i);
+          setTransitionSeq((s) => s + 1);
+        }
+        return next;
+      });
     },
     [slides.length],
   );
+  const goToSlideId = useCallback(
+    (slideId: string) => {
+      const target = slides.findIndex((s) => s.id === slideId);
+      if (target < 0) return;
+      navigateToIndex(target);
+    },
+    [navigateToIndex, slides],
+  );
+  const goFirst = useCallback(() => navigateToIndex(0), [navigateToIndex]);
+  const goLast = useCallback(() => navigateToIndex(slides.length - 1), [navigateToIndex, slides.length]);
 
   // 進入時要求全螢幕
   useEffect(() => {
@@ -66,15 +98,15 @@ export function PresentationPlayer({ onClose }: { onClose: () => void }) {
         go(-1);
       } else if (e.key === "Home") {
         e.preventDefault();
-        setIdx(0);
+        navigateToIndex(0);
       } else if (e.key === "End") {
         e.preventDefault();
-        setIdx(slides.length - 1);
+        navigateToIndex(slides.length - 1);
       }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [go, onClose, slides.length]);
+  }, [go, navigateToIndex, onClose, slides.length]);
 
   // 滑鼠靜止自動隱藏控制列
   const pokeControls = useCallback(() => {
@@ -132,12 +164,37 @@ export function PresentationPlayer({ onClose }: { onClose: () => void }) {
   }, [idx, slides, project.assets]);
 
   const slide = slides[idx];
+  const prevSlide = prevIdx !== null ? slides[prevIdx] : undefined;
+  const activeTransition = slide?.transition ?? { preset: "crossfade", duration: 600, easing: "ease-in-out" };
+
+  useEffect(() => {
+    if (prevIdx === null) return;
+    if (clearPrevTimer.current) window.clearTimeout(clearPrevTimer.current);
+    clearPrevTimer.current = window.setTimeout(() => setPrevIdx(null), Math.max(120, activeTransition.duration));
+    return () => {
+      if (clearPrevTimer.current) window.clearTimeout(clearPrevTimer.current);
+    };
+  }, [prevIdx, activeTransition.duration]);
+
+  useEffect(() => {
+    setElementAnimSeq((s) => s + 1);
+  }, [idx]);
 
   return (
     <div
       ref={rootRef}
       onMouseMove={pokeControls}
-      onClick={() => go(1)}
+      onClick={(e) => {
+        const target = e.target as HTMLElement;
+        const linkEl = target.closest("[data-csg-link='1']") as HTMLElement | null;
+        if (linkEl) {
+          const kind = linkEl.dataset.csgLinkKind;
+          const value = linkEl.dataset.csgLinkValue;
+          if (kind === "slide" && value) goToSlideId(value);
+          return;
+        }
+        go(1);
+      }}
       style={{
         position: "fixed",
         inset: 0,
@@ -152,14 +209,33 @@ export function PresentationPlayer({ onClose }: { onClose: () => void }) {
       {slide && (
         <div
           style={{
+            position: "absolute",
+            left: "50%",
+            top: "50%",
             width: CANVAS_WIDTH,
             height: CANVAS_HEIGHT,
-            transform: `scale(${scale})`,
-            transformOrigin: "center",
-            flexShrink: 0,
+            transform: `translate(-50%, -50%) scale(${scale})`,
+            transformOrigin: "center center",
+            overflow: "hidden",
           }}
         >
-          <SlideStage slide={slide} theme={project.theme} assets={assets} />
+          {prevSlide && (
+            <div style={{ position: "absolute", inset: 0, zIndex: 1 }}>
+              <SlideStage slide={prevSlide} theme={project.theme} assets={assets} animateElements={false} />
+            </div>
+          )}
+          <div
+            key={`transition-${transitionSeq}-${slide.id}`}
+            style={{ position: "absolute", inset: 0, zIndex: 2, ...enterTransitionStyle(activeTransition) }}
+          >
+            <SlideStage
+              slide={slide}
+              theme={project.theme}
+              assets={assets}
+              animateElements={true}
+              animationNonce={elementAnimSeq}
+            />
+          </div>
         </div>
       )}
 
@@ -185,16 +261,55 @@ export function PresentationPlayer({ onClose }: { onClose: () => void }) {
           pointerEvents: controlsVisible ? "auto" : "none",
         }}
       >
+        <PlayerBtn label="<<" onClick={goFirst} disabled={idx === 0} title="第一頁 (Home)" />
         <PlayerBtn label="‹" onClick={() => go(-1)} disabled={idx === 0} />
         <span style={{ minWidth: 64, textAlign: "center", fontVariantNumeric: "tabular-nums" }}>
           {idx + 1} / {slides.length}
         </span>
         <PlayerBtn label="›" onClick={() => go(1)} disabled={idx === slides.length - 1} />
+        <PlayerBtn label=">>" onClick={goLast} disabled={idx === slides.length - 1} title="最後頁 (End)" />
         <span style={{ width: 1, height: 20, background: "rgba(255,255,255,.25)" }} />
         <PlayerBtn label="✕" onClick={onClose} title="離開播放 (Esc)" />
       </div>
+      <style>{`
+        @keyframes csg-player-fade {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+        @keyframes csg-player-wipe {
+          from { clip-path: inset(0 100% 0 0); opacity: 1; }
+          to { clip-path: inset(0 0 0 0); opacity: 1; }
+        }
+        @keyframes csg-player-push {
+          from { transform: translateX(100%); opacity: 1; }
+          to { transform: translateX(0); opacity: 1; }
+        }
+        @keyframes csg-player-cover {
+          from { transform: translateY(100%); opacity: 1; }
+          to { transform: translateY(0); opacity: 1; }
+        }
+      `}</style>
     </div>
   );
+}
+
+function enterTransitionStyle(transition: { preset: string; duration: number; easing: string }) {
+  const timing = `${transition.duration}ms ${transition.easing}`;
+  const base = {
+    animationFillMode: "both" as const,
+    willChange: "opacity, transform, clip-path",
+  };
+  if (transition.preset === "wipe-right") {
+    return { ...base, animation: `csg-player-wipe ${timing}` };
+  }
+  if (transition.preset === "push-left") {
+    return { ...base, animation: `csg-player-push ${timing}` };
+  }
+  if (transition.preset === "cover") {
+    return { ...base, animation: `csg-player-cover ${timing}` };
+  }
+  // crossfade 與未知 preset 一律走淡化
+  return { ...base, animation: `csg-player-fade ${timing}` };
 }
 
 function PlayerBtn({

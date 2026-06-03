@@ -1,19 +1,31 @@
 /**
- * AI 生成流程：原文 → 繁中整理 → 三層大綱 → 版型意圖 → 物件樹 Project。
+ * AI 生成流程：原文 → 繁中整理 → 逐段分析 → 版型意圖 → 物件樹 Project。
  */
-import { DEFAULT_MOTION, createBlankProject, createBlankSlide, createImageElement, createTextElement, newId } from "../../model/factory";
-import type { OutlineNode, Project, AssetRef, Slide, GenerationQualityReport } from "../../model/types";
-import { CANVAS_HEIGHT, CANVAS_WIDTH } from "../../model/types";
-import { deckIntentSchema, type LayoutIntent } from "../layout/intent";
+import { DEFAULT_MOTION, createBlankProject, newId } from "../../model/factory";
+import type { OutlineNode, Project, AssetRef, GenerationQualityReport } from "../../model/types";
+import type { LayoutIntent } from "../layout/intent";
 import { buildPatchIntentForRequirement, ensureOutlineCoverage } from "./outline-coverage";
+import {
+  analyzeParagraphsInBatches,
+  outlineFromParagraphAnalysis,
+  paragraphsToSlideBriefs,
+  splitArticleParagraphs,
+} from "./paragraph-analysis";
+import {
+  appendMissingImageMarkers,
+  insertAllImagesIntoBriefs,
+  replaceImagePlaceholders,
+  stripImageMarkers,
+} from "./image-placement";
+import {
+  buildIntentFromBrief,
+  splitLargeBriefs,
+} from "./slide-briefs";
 import { translateDeck } from "../layout/translate";
 import { chat } from "../llm/client";
+import { requestJson } from "../llm/json";
 import {
-  OUTLINE_SYSTEM,
   TRANSLATE_SYSTEM,
-  intentSystem,
-  userIntentPrompt,
-  userOutlinePrompt,
 } from "../llm/prompts";
 import type { ProviderCredentials } from "../llm/types";
 import type { ParsedImage } from "../import/parse-document";
@@ -38,106 +50,14 @@ export interface GenerateInput {
   onProgress?: (stage: string) => void;
 }
 
-/** 從 LLM 回傳中萃取 JSON 物件（容忍 ```json 包裹、前後雜訊、尾逗號與截斷）。 */
-export function extractJson(raw: string): unknown {
-  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const body = fenced ? fenced[1]! : raw;
-  const start = body.indexOf("{");
-  if (start < 0) throw new Error("AI 未回傳有效 JSON");
+export { extractJson } from "../llm/json";
 
-  // 以括號平衡掃描，找出第一個完整的頂層物件（忽略字串內的括號）。
-  const balanced = sliceBalanced(body, start);
-  const candidate = balanced ?? body.slice(start);
-
-  // 先嘗試直接解析；失敗則修復（去尾逗號 + 補齊截斷的括號）再試。
-  try {
-    return JSON.parse(candidate);
-  } catch {
-    const repaired = repairJson(candidate);
-    try {
-      return JSON.parse(repaired);
-    } catch (e) {
-      throw new Error(`AI 回傳的 JSON 無法解析：${e instanceof Error ? e.message : "格式錯誤"}`);
-    }
+function buildImageAssetMap(assets: AssetRef[]): Record<string, { width?: number; height?: number }> {
+  const map: Record<string, { width?: number; height?: number }> = {};
+  for (const a of assets) {
+    if (a.kind === "image") map[a.id] = { width: a.width, height: a.height };
   }
-}
-
-/** 從 start（'{'）開始掃描，回傳括號平衡後的字串；若被截斷回傳 null。 */
-function sliceBalanced(s: string, start: number): string | null {
-  let depth = 0;
-  let inStr = false;
-  let esc = false;
-  for (let i = start; i < s.length; i++) {
-    const c = s[i]!;
-    if (inStr) {
-      if (esc) esc = false;
-      else if (c === "\\") esc = true;
-      else if (c === '"') inStr = false;
-      continue;
-    }
-    if (c === '"') inStr = true;
-    else if (c === "{" || c === "[") depth++;
-    else if (c === "}" || c === "]") {
-      depth--;
-      if (depth === 0) return s.slice(start, i + 1);
-    }
-  }
-  return null;
-}
-
-/** 修復常見的非法 JSON：尾逗號、未閉合字串、被截斷的括號。 */
-function repairJson(input: string): string {
-  let s = input;
-
-  // 補齊未閉合的字串並追蹤括號堆疊。
-  const stack: string[] = [];
-  let inStr = false;
-  let esc = false;
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i]!;
-    if (inStr) {
-      if (esc) esc = false;
-      else if (c === "\\") esc = true;
-      else if (c === '"') inStr = false;
-      continue;
-    }
-    if (c === '"') inStr = true;
-    else if (c === "{") stack.push("}");
-    else if (c === "[") stack.push("]");
-    else if (c === "}" || c === "]") stack.pop();
-  }
-  if (inStr) s += '"';
-
-  // 移除結尾被截斷的不完整片段（如 "key": 或 "key":"value）。
-  s = s.replace(/,\s*"[^"]*"\s*:?\s*$/g, "");
-  // 移除尾逗號（物件 / 陣列）。
-  s = s.replace(/,\s*$/g, "");
-
-  // 依堆疊補齊缺少的括號。
-  while (stack.length > 0) {
-    s = s.replace(/,\s*$/g, "");
-    s += stack.pop();
-  }
-  // 最後再清一次物件 / 陣列內的尾逗號。
-  s = s.replace(/,(\s*[}\]])/g, "$1");
-  return s;
-}
-
-function coerceOutline(value: unknown): OutlineNode[] {
-  const root = value as { outline?: unknown };
-  const arr = Array.isArray(root.outline) ? root.outline : Array.isArray(value) ? value : [];
-  const walk = (n: unknown): OutlineNode | null => {
-    if (!n || typeof n !== "object") return null;
-    const o = n as Record<string, unknown>;
-    const level = o.level === 2 ? 2 : o.level === 3 ? 3 : 1;
-    const text = typeof o.text === "string" ? o.text : "";
-    if (!text) return null;
-    const children = Array.isArray(o.children)
-      ? o.children.map(walk).filter((x): x is OutlineNode => x !== null)
-      : [];
-    return { level: level as 1 | 2 | 3, text, keyPoint: o.keyPoint === true, children };
-  };
-  return (arr as unknown[]).map(walk).filter((x): x is OutlineNode => x !== null);
+  return map;
 }
 
 export async function generatePresentation(input: GenerateInput): Promise<Project> {
@@ -148,8 +68,7 @@ export async function generatePresentation(input: GenerateInput): Promise<Projec
   const project = createBlankProject(input.title ?? "AI 教學簡報");
   project.id = newId("proj");
 
-  // 1. 處理圖片：先全數加入 project.assets，提供給 AI 選擇
-  const availableImages: { id: string; name: string }[] = [];
+  // 1. 處理圖片：先全數加入 project.assets
   const imageAssets: AssetRef[] = [];
   if (input.images && input.images.length > 0) {
     const seen = new Set<string>();
@@ -168,7 +87,6 @@ export async function generatePresentation(input: GenerateInput): Promise<Projec
       };
       imageAssets.push(asset);
       project.assets.push(asset);
-      availableImages.push({ id: asset.id, name: asset.name });
     }
   }
 
@@ -186,70 +104,40 @@ export async function generatePresentation(input: GenerateInput): Promise<Projec
     );
   }
 
-  // 3. 在內容尾端附加圖片標籤清單，強化 AI 回填圖片的機率
-  const contentForOutline = appendImageMarkers(content, availableImages);
+  content = replaceImagePlaceholders(content, imageAssets);
+  content = appendMissingImageMarkers(content, imageAssets);
 
-  // 4. 規劃大綱
-  onProgress?.("規劃大綱中…");
-  const outlineRaw = await chat(
-    creds,
-    [
-      { role: "system", content: OUTLINE_SYSTEM },
-      {
-        role: "user",
-        content: userOutlinePrompt(contentForOutline, {
-          pageStrategy: input.pageStrategy,
-          emphasisKeywords: input.emphasisKeywords,
-        }),
-      },
-    ],
-    { temperature: 0.4, json: true, maxTokens: 16384, signal },
-  );
-  const outline = coerceOutline(extractJson(outlineRaw));
-
-  // 5. 分段設計版面（Chunking 避免 LLM 10 頁截斷問題）
-  onProgress?.("設計版面中…");
-  const allSlides: LayoutIntent[] = [];
-  const CHUNK_SIZE = 2;
-  for (let i = 0; i < outline.length; i += CHUNK_SIZE) {
-    const chunkOutline = outline.slice(i, i + CHUNK_SIZE);
-    onProgress?.(`設計版面中… (進度 ${i + 1}/${outline.length})`);
-
-    try {
-      const intentRaw = await chat(
-        creds,
-        [
-          { role: "system", content: intentSystem() },
-          {
-            role: "user",
-            content: userIntentPrompt(JSON.stringify({ outline: chunkOutline }), availableImages, {
-              deckStyle: input.deckStyle,
-              pageStrategy: input.pageStrategy,
-            }),
-          },
-        ],
-        { temperature: 0.5, json: true, maxTokens: 16384, signal },
-      );
-
-      const parsed = deckIntentSchema.safeParse(extractJson(intentRaw));
-      if (parsed.success) {
-        allSlides.push(...parsed.data.slides);
-      } else {
-        console.warn(`批次 ${i} 版面解析失敗:`, parsed.error);
-      }
-    } catch (err) {
-      console.warn(`批次 ${i} 生成失敗:`, err);
-    }
+  // 4. 逐段分析：每段先摘要條列，再提煉標題（不可遺漏任何一段）
+  const rawParagraphs = splitArticleParagraphs(content);
+  if (rawParagraphs.length === 0) {
+    throw new Error("無法從文章切出有效段落，請確認內容長度足夠。");
   }
+  const cleanParagraphs = rawParagraphs.map(stripImageMarkers);
 
-  if (allSlides.length === 0) {
-    throw new Error("AI 產生的版面全數失敗或為空，請稍後再試。");
+  onProgress?.(`逐段分析中…（共 ${cleanParagraphs.length} 段）`);
+  const analyzed = await analyzeParagraphsInBatches(cleanParagraphs, creds, {
+    signal,
+    onProgress,
+    pageStrategy: input.pageStrategy,
+  });
+
+  const outline: OutlineNode[] = outlineFromParagraphAnalysis(analyzed);
+
+  // 5. 依逐段規格組裝投影片（一段至少一頁，條列完整保留）
+  onProgress?.("組裝投影片規格…");
+  let slideBriefs = splitLargeBriefs(paragraphsToSlideBriefs(analyzed), 7);
+  onProgress?.(`分配 ${imageAssets.length} 張附圖…`);
+  slideBriefs = insertAllImagesIntoBriefs(slideBriefs, imageAssets, rawParagraphs);
+
+  let slidesWithCoverage: LayoutIntent[] = slideBriefs.map((b) => buildIntentFromBrief(b));
+  if (slidesWithCoverage.length === 0) {
+    throw new Error("無法從文章產生投影片，請稍後再試。");
   }
 
   // 6. 大綱覆蓋率檢查：缺漏節點自動補頁
   onProgress?.("檢查大綱覆蓋率…");
-  const coverage = ensureOutlineCoverage(outline, allSlides);
-  let slidesWithCoverage = coverage.intents;
+  const coverage = ensureOutlineCoverage(outline, slidesWithCoverage);
+  slidesWithCoverage = coverage.intents;
   let coverageReport = coverage.report;
   if (coverageReport.patchedSlides > 0) {
     onProgress?.(
@@ -281,7 +169,11 @@ export async function generatePresentation(input: GenerateInput): Promise<Projec
 
   // 7. 組裝
   onProgress?.("組裝簡報中…");
-  const slides = translateDeck(slidesWithCoverage, { motionDefaults: DEFAULT_MOTION });
+  const imageMap = buildImageAssetMap(imageAssets);
+  const slides = translateDeck(slidesWithCoverage, {
+    motionDefaults: DEFAULT_MOTION,
+    imageAssets: imageMap,
+  });
 
   project.source = {
     originalText: input.rawText,
@@ -291,16 +183,6 @@ export async function generatePresentation(input: GenerateInput): Promise<Projec
     quality: quality.report,
   };
   project.deck.slides = slides.length > 0 ? slides : project.deck.slides;
-
-  // 8. 鐵律：找出未被 AI 使用的圖片，強制附加到簡報後方
-  const usedImageIds = new Set<string>();
-  for (const slide of slidesWithCoverage) {
-    for (const slot of slide.slots ?? []) {
-      if (slot.imageAssetId) usedImageIds.add(slot.imageAssetId);
-    }
-  }
-  const unusedImages = imageAssets.filter((a) => !usedImageIds.has(a.id));
-  appendUnusedImageSlides(project, unusedImages);
 
   return project;
 }
@@ -421,57 +303,6 @@ function buildQualityReportAndPatchSlides(
   };
 }
 
-function appendImageMarkers(content: string, images: { id: string; name: string }[]): string {
-  if (!images.length) return content;
-  const lines = images.map((img) => `- [Image: ${img.id}] ${img.name}`);
-  return `${content}\n\n【原文附圖標籤（不得遺漏）】\n${lines.join("\n")}`;
-}
-
-/** 鐵律｜把未被 AI 妥善使用的圖片放入簡報，確保不遺漏。 */
-function appendUnusedImageSlides(project: Project, unusedImages: AssetRef[]): void {
-  if (unusedImages.length === 0) return;
-  const extraSlides: Slide[] = [];
-
-  for (const asset of unusedImages) {
-    const slide = createBlankSlide("image-feature");
-    const title = createTextElement(
-      asset.name,
-      { x: 120, y: 72, width: CANVAS_WIDTH - 240, height: 96 },
-      { fontSize: 44, color: "var(--text)" },
-    );
-    title.autoSize = false;
-
-    const maxW = CANVAS_WIDTH - 240;
-    const maxH = CANVAS_HEIGHT - 320;
-    const natW = asset.width ?? maxW;
-    const natH = asset.height ?? maxH;
-    const scale = Math.min(maxW / natW, maxH / natH, 1);
-    const w = Math.round(natW * scale) || maxW;
-    const h = Math.round(natH * scale) || maxH;
-
-    const imageEl = createImageElement(asset.id, {
-      x: Math.round((CANVAS_WIDTH - w) / 2),
-      y: 200,
-      width: w,
-      height: h,
-      zIndex: 1,
-    });
-    imageEl.fit = "contain";
-
-    const caption = createTextElement(
-      asset.name,
-      { x: 120, y: CANVAS_HEIGHT - 96, width: CANVAS_WIDTH - 240, height: 56 },
-      { fontSize: 26, color: "var(--text-mute)", align: "center" },
-    );
-    caption.autoSize = false;
-
-    slide.elements = [title, imageEl, caption];
-    extraSlides.push(slide);
-  }
-
-  project.deck.slides = [...project.deck.slides, ...extraSlides];
-}
-
 /** AI 風格主題生成：根據文字描述，產生一組 CSS 自訂屬性覆寫值。 */
 export async function generateTheme(
   prompt: string,
@@ -494,12 +325,12 @@ export async function generateTheme(
 }}
 只輸出單一合法 JSON 物件。字型建議使用系統內建字型如 "Inter", "Noto Sans TC", "Noto Serif TC" 等。`;
 
-  const raw = await chat(
+  const parsed = (await requestJson(
     creds,
     [{ role: "system", content: system }, { role: "user", content: prompt }],
-    { temperature: 0.7, json: true },
-  );
-  const parsed = extractJson(raw) as any;
-  if (!parsed || !parsed.tokens) throw new Error("AI 主題產生失敗");
+    { temperature: 0.7, maxTokens: 4096 },
+    "AI 主題",
+  )) as { tokens?: Record<string, string> };
+  if (!parsed?.tokens) throw new Error("AI 主題產生失敗");
   return parsed.tokens;
 }

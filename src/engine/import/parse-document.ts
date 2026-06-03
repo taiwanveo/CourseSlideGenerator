@@ -22,6 +22,10 @@ export interface ParsedDoc {
 }
 
 const MAX_IMAGES = 40;
+const BLOCK_TAGS = new Set([
+  "p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li", "blockquote", "pre", "table", "tr", "section", "article",
+]);
+const SKIP_TAGS = new Set(["script", "style", "noscript", "nav", "footer", "header", "aside", "iframe", "svg"]);
 
 function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -47,42 +51,68 @@ async function srcToDataUrl(src: string): Promise<string | null> {
   }
 }
 
-/** 從 HTML 文件抽取 <img>（含 data: 與外部連結），轉為 data URL。 */
-async function extractHtmlImages(doc: Document, baseUrl?: string): Promise<ParsedImage[]> {
-  const out: ParsedImage[] = [];
+/** 從 HTML 依閱讀順序抽取內文，並在圖片位置插入 [IMG:n] 占位符。 */
+async function extractTextAndImagesFromHtml(
+  doc: Document,
+  baseUrl?: string,
+): Promise<{ text: string; images: ParsedImage[] }> {
+  const images: ParsedImage[] = [];
   const seen = new Set<string>();
-  const imgs = Array.from(doc.querySelectorAll("img"));
-  for (const img of imgs) {
-    if (out.length >= MAX_IMAGES) break;
-    let src = img.getAttribute("src") ?? img.getAttribute("data-src") ?? "";
-    if (!src) continue;
-    if (baseUrl && !/^(https?:|data:)/i.test(src)) {
-      try {
-        src = new URL(src, baseUrl).href;
-      } catch {
-        continue;
-      }
+
+  async function walk(node: Node): Promise<string> {
+    if (node.nodeType === Node.TEXT_NODE) {
+      return (node.textContent ?? "").replace(/\s+/g, " ");
     }
-    const dataUrl = await srcToDataUrl(src);
-    if (!dataUrl || seen.has(dataUrl)) continue;
-    seen.add(dataUrl);
-    out.push({ dataUrl, name: img.getAttribute("alt")?.trim() || `圖片 ${out.length + 1}` });
+    if (node.nodeType !== Node.ELEMENT_NODE) return "";
+    const el = node as Element;
+    const tag = el.tagName.toLowerCase();
+    if (SKIP_TAGS.has(tag)) return "";
+
+    if (tag === "img") {
+      let src = el.getAttribute("src") ?? el.getAttribute("data-src") ?? "";
+      if (!src) return "";
+      if (baseUrl && !/^(https?:|data:)/i.test(src)) {
+        try {
+          src = new URL(src, baseUrl).href;
+        } catch {
+          return "";
+        }
+      }
+      const dataUrl = await srcToDataUrl(src);
+      if (!dataUrl || seen.has(dataUrl)) return "";
+      seen.add(dataUrl);
+      const idx = images.length;
+      images.push({
+        dataUrl,
+        name: el.getAttribute("alt")?.trim() || `圖片 ${idx + 1}`,
+      });
+      return `\n[IMG:${idx}]\n`;
+    }
+
+    if (tag === "br") return "\n";
+
+    const parts = await Promise.all(Array.from(el.childNodes).map((child) => walk(child)));
+    const inner = parts.join("");
+    if (BLOCK_TAGS.has(tag)) {
+      const trimmed = inner.trim();
+      return trimmed ? `${trimmed}\n\n` : "";
+    }
+    return inner;
   }
-  return out;
+
+  doc.querySelectorAll("script,style,noscript,nav,footer,header,aside,iframe,svg").forEach((n) => n.remove());
+  const main = doc.querySelector("article, main, [role=main]") ?? doc.body;
+  const text = (await walk(main)).replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+  return { text, images };
 }
 
-/** 解析 HTML：同時抽取主要內文與圖片。 */
+/** 解析 HTML：同時抽取主要內文與圖片（圖片占位符嵌入正文）。 */
 async function parseHtmlContent(
   html: string,
   baseUrl?: string,
 ): Promise<{ text: string; images: ParsedImage[] }> {
   const doc = new DOMParser().parseFromString(html, "text/html");
-  // 先抽圖（移除前），再清除雜訊節點取得乾淨內文
-  const images = await extractHtmlImages(doc, baseUrl);
-  doc.querySelectorAll("script,style,noscript,nav,footer,header,aside,iframe,svg").forEach((n) => n.remove());
-  const main = doc.querySelector("article, main, [role=main]") ?? doc.body;
-  const text = (main.textContent ?? "").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
-  return { text, images };
+  return extractTextAndImagesFromHtml(doc, baseUrl);
 }
 
 function stripMarkdown(md: string): string {
@@ -95,19 +125,26 @@ function stripMarkdown(md: string): string {
     .trim();
 }
 
-/** 從 Markdown 抽取圖片（![alt](url)）。 */
-async function extractMarkdownImages(md: string): Promise<ParsedImage[]> {
-  const out: ParsedImage[] = [];
+/** 從 Markdown 抽取圖片並在正文保留 [IMG:n] 占位符。 */
+async function parseMarkdownContent(md: string): Promise<{ text: string; images: ParsedImage[] }> {
+  const images: ParsedImage[] = [];
   const seen = new Set<string>();
-  const re = /!\[([^\]]*)\]\(([^)\s]+)/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(md)) !== null && out.length < MAX_IMAGES) {
+  let out = md;
+  const matches = [...md.matchAll(/!\[([^\]]*)\]\(([^)\s]+)/g)];
+
+  for (const m of matches) {
+    if (images.length >= MAX_IMAGES) break;
     const dataUrl = await srcToDataUrl(m[2]!);
     if (!dataUrl || seen.has(dataUrl)) continue;
     seen.add(dataUrl);
-    out.push({ dataUrl, name: m[1]?.trim() || `圖片 ${out.length + 1}` });
+    const idx = images.length;
+    images.push({ dataUrl, name: m[1]?.trim() || `圖片 ${idx + 1}` });
+    const alt = m[1]?.trim();
+    const replacement = alt ? `${alt}\n[IMG:${idx}]\n` : `[IMG:${idx}]\n`;
+    out = out.replace(m[0], replacement);
   }
-  return out;
+
+  return { text: stripMarkdown(out), images };
 }
 
 async function parsePdf(file: File): Promise<{ text: string; images: ParsedImage[] }> {
@@ -129,7 +166,8 @@ async function parsePdf(file: File): Promise<{ text: string; images: ParsedImage
       .join(" ")
       .replace(/\s+/g, " ")
       .trim();
-    if (text) pages.push(text);
+
+    const pageMarkers: string[] = [];
 
     // 盡力抽取頁面內嵌圖片（失敗不影響文字）
     if (images.length < MAX_IMAGES) {
@@ -146,8 +184,10 @@ async function parsePdf(file: File): Promise<{ text: string; images: ParsedImage
             const img = await pdfImageToDataUrl(page, objName);
             if (img && !seen.has(img.dataUrl)) {
               seen.add(img.dataUrl);
-              img.name = `PDF 圖片 ${images.length + 1}`;
+              const idx = images.length;
+              img.name = `PDF 圖片 ${idx + 1}`;
               images.push(img);
+              pageMarkers.push(`[IMG:${idx}]`);
             }
           }
         }
@@ -155,6 +195,12 @@ async function parsePdf(file: File): Promise<{ text: string; images: ParsedImage
         /* 此頁圖片抽取失敗 — 略過 */
       }
     }
+
+    let pagePart = text;
+    if (pageMarkers.length > 0) {
+      pagePart = pagePart ? `${pagePart}\n\n${pageMarkers.join("\n")}` : pageMarkers.join("\n");
+    }
+    if (pagePart) pages.push(pagePart);
   }
   return { text: pages.join("\n\n").trim(), images };
 }
@@ -232,20 +278,26 @@ export async function parseFile(file: File): Promise<ParsedDoc> {
   if (lower.endsWith(".docx")) {
     const mammoth = await import("mammoth/mammoth.browser");
     const buffer = await file.arrayBuffer();
-    const result = await mammoth.extractRawText({ arrayBuffer: buffer });
+    let text = "";
     let images: ParsedImage[] = [];
     try {
-      // convertToHtml 預設會把內嵌圖片轉成 data URI，再從 HTML 抽出（瀏覽器版型別未宣告此 API，故 cast）
       const convertToHtml = (mammoth as unknown as {
         convertToHtml(o: { arrayBuffer: ArrayBuffer }): Promise<{ value: string }>;
       }).convertToHtml;
       const htmlResult = await convertToHtml({ arrayBuffer: buffer });
       const doc = new DOMParser().parseFromString(htmlResult.value, "text/html");
-      images = await extractHtmlImages(doc);
+      const extracted = await extractTextAndImagesFromHtml(doc);
+      text = extracted.text;
+      images = extracted.images;
     } catch {
-      /* 圖片抽取失敗不影響文字匯入 */
+      const result = await mammoth.extractRawText({ arrayBuffer: buffer });
+      text = result.value.trim();
     }
-    return { text: result.value.trim(), sourceName: name, images };
+    if (!text) {
+      const result = await mammoth.extractRawText({ arrayBuffer: buffer });
+      text = result.value.trim();
+    }
+    return { text, sourceName: name, images };
   }
 
   const raw = await file.text();
@@ -254,7 +306,8 @@ export async function parseFile(file: File): Promise<ParsedDoc> {
     return { text, sourceName: name, images };
   }
   if (lower.endsWith(".md") || lower.endsWith(".markdown")) {
-    return { text: stripMarkdown(raw), sourceName: name, images: await extractMarkdownImages(raw) };
+    const { text, images } = await parseMarkdownContent(raw);
+    return { text, sourceName: name, images };
   }
   return { text: raw.trim(), sourceName: name, images: [] };
 }
@@ -267,7 +320,7 @@ export async function parseUrl(url: string): Promise<ParsedDoc> {
     res = await platformRequest(normalized, { headers: { Accept: "text/html,*/*" } });
   } catch (e) {
     throw new Error(
-      `無法連線到網址（瀏覽器版可能受 CORS 限制，桌面版可正常使用）：${
+      `無法連線到這個網址。這通常是因為網站不允許直接擷取內容，或目前網路連線不穩定。你可以改用桌面模式、貼上文章內文，或上傳檔案匯入。系統訊息：${
         e instanceof Error ? e.message : String(e)
       }`,
     );

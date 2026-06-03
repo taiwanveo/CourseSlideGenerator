@@ -5,6 +5,7 @@
 import { useCallback, useRef, useState, useEffect } from "react";
 import { CANVAS_HEIGHT, CANVAS_WIDTH } from "../model/types";
 import type { Element, Slide } from "../model/types";
+import { plainText } from "../model/factory";
 import { buildAssetMap } from "../renderer/assets";
 import { SlideStage } from "../renderer/SlideStage";
 import { useStageScale } from "../renderer/useStageScale";
@@ -23,6 +24,7 @@ interface DragState {
   handle?: Exclude<HandleId, "rotate">;
   startPointer: Vec;
   startTransforms: Record<string, Element["transform"]>;
+  startTextStyle: Record<string, { fontSize: number; itemGap?: number }>;
   ids: string[];
 }
 
@@ -35,15 +37,19 @@ export function EditorCanvas() {
   const toggleSelect = useEditor((s) => s.toggleSelect);
   const clearSelection = useEditor((s) => s.clearSelection);
   const updateTransform = useEditor((s) => s.updateTransform);
+  const updateElement = useEditor((s) => s.updateElement);
   const commit = useEditor((s) => s.commit);
   const reorderElement = useEditor((s) => s.reorderElement);
   const deleteSelected = useEditor((s) => s.deleteSelected);
+  const animationPreview = useEditor((s) => s.animationPreview);
 
   const { ref, scale, offsetX, offsetY } = useStageScale(CANVAS_WIDTH, CANVAS_HEIGHT);
   const dragRef = useRef<DragState | null>(null);
   const [sizeLabel, setSizeLabel] = useState<string | null>(null);
   const [guides, setGuides] = useState<Guide[]>([]);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const [editing, setEditing] = useState<{ id: string; text: string; kind: "text" | "list"; caret: number } | null>(null);
+  const editorRef = useRef<HTMLTextAreaElement>(null);
 
   const closeMenu = useCallback(() => setContextMenu(null), []);
 
@@ -70,6 +76,7 @@ export function EditorCanvas() {
   );
 
   const onElementDown = (el: Element, e: React.PointerEvent) => {
+    if (editing) return;
     e.stopPropagation();
     const additive = e.shiftKey;
     if (!selection.includes(el.id)) toggleSelect(el.id, additive);
@@ -82,8 +89,16 @@ export function EditorCanvas() {
   const onHandleDown = (handle: HandleId, e: React.PointerEvent) => {
     e.stopPropagation();
     commit();
-    if (handle === "rotate") startDrag("rotate", undefined, e, selection);
-    else startDrag("resize", handle, e, selection);
+    if (handle === "rotate") {
+      startDrag("rotate", undefined, e, selection);
+    } else {
+      for (const id of selection) {
+        updateElement(id, (el) => {
+          if (el.type === "text" || el.type === "list") el.autoSize = false;
+        });
+      }
+      startDrag("resize", handle, e, selection);
+    }
   };
 
   const startDrag = (
@@ -94,15 +109,24 @@ export function EditorCanvas() {
   ) => {
     if (!slide) return;
     const startTransforms: Record<string, Element["transform"]> = {};
+    const startTextStyle: Record<string, { fontSize: number; itemGap?: number }> = {};
     for (const id of ids) {
       const el = slide.elements.find((x) => x.id === id);
-      if (el) startTransforms[id] = { ...el.transform };
+      if (!el) continue;
+      startTransforms[id] = { ...el.transform };
+      if (el.type === "text" || el.type === "list") {
+        startTextStyle[id] = {
+          fontSize: el.style.fontSize,
+          itemGap: el.type === "list" ? el.style.itemGap : undefined,
+        };
+      }
     }
     dragRef.current = {
       mode,
       handle,
       startPointer: toDesign(e.clientX, e.clientY),
       startTransforms,
+      startTextStyle,
       ids,
     };
     window.addEventListener("pointermove", onMove);
@@ -177,6 +201,23 @@ export function EditorCanvas() {
         if (id && st) {
           const next = resizeTransform({ ...st }, drag.handle, p);
           updateTransform(id, next, false);
+          const startTypo = drag.startTextStyle[id];
+          if (startTypo) {
+            const widthScale = next.width / Math.max(1, st.width);
+            const heightScale = next.height / Math.max(1, st.height);
+            let typoScale = Math.sqrt(widthScale * heightScale);
+            if (drag.handle === "e" || drag.handle === "w") typoScale = widthScale;
+            if (drag.handle === "n" || drag.handle === "s") typoScale = heightScale;
+            const nextFont = Math.max(8, Math.min(320, Math.round(startTypo.fontSize * typoScale)));
+            updateElement(id, (el) => {
+              if (el.type === "text" || el.type === "list") {
+                el.style.fontSize = nextFont;
+                if (el.type === "list" && typeof startTypo.itemGap === "number") {
+                  el.style.itemGap = Math.max(0, Math.round(startTypo.itemGap * typoScale));
+                }
+              }
+            });
+          }
           setSizeLabel(`${Math.round(next.width)} × ${Math.round(next.height)}`);
         }
       } else if (drag.mode === "rotate") {
@@ -215,12 +256,48 @@ export function EditorCanvas() {
     };
   };
 
+  const startInlineEdit = (el: Element, e: React.MouseEvent) => {
+    if (el.type !== "text" && el.type !== "list") return;
+    const rawText =
+      el.type === "text"
+        ? el.content.spans.map((s) => s.text).join("")
+        : el.items.map((it) => it.spans.map((s) => s.text).join("")).join("\n");
+    const isPlaceholder = el.type === "text" && rawText.trim() === "輸入文字";
+    const baseText = isPlaceholder ? "" : rawText;
+    const localX = (e.clientX - (offsetX + el.transform.x * scale)) / scale;
+    const estCharW = Math.max(6, (el.type === "text" ? el.style.fontSize : el.style.fontSize) * 0.55);
+    const approx = Math.max(0, Math.min(baseText.length, Math.round(localX / estCharW)));
+    setEditing({ id: el.id, text: baseText, kind: el.type, caret: approx });
+  };
+
+  useEffect(() => {
+    if (!editing || !editorRef.current) return;
+    const input = editorRef.current;
+    input.focus();
+    const pos = Math.max(0, Math.min(editing.text.length, editing.caret));
+    input.setSelectionRange(pos, pos);
+  }, [editing]);
+
+  const commitInlineEdit = () => {
+    if (!editing) return;
+    const val = editorRef.current?.value ?? editing.text;
+    updateElement(editing.id, (el) => {
+      if (el.type === "text") {
+        el.content = plainText(val);
+      } else if (el.type === "list") {
+        el.items = val.split("\n").map((t) => plainText(t));
+      }
+    });
+    setEditing(null);
+  };
+
   return (
     <div
       ref={ref}
       id="editor-canvas"
       tabIndex={-1}
       onPointerDown={(e) => {
+        if ((e.target as HTMLElement).dataset.inlineEditor === "1") return;
         clearSelection();
         e.currentTarget.focus();
       }}
@@ -228,7 +305,7 @@ export function EditorCanvas() {
         flex: 1,
         position: "relative",
         overflow: "hidden",
-        background: "var(--app-canvas-bg, #15140f)",
+        background: "var(--app-editor-canvas-bg, hsl(0, 0%, 20%))",
         outline: "none",
       }}
     >
@@ -246,7 +323,13 @@ export function EditorCanvas() {
         }}
       >
         <div style={{ transform: `scale(${scale})`, transformOrigin: "top left" }}>
-          <SlideStage slide={slide} theme={project.theme} assets={assets} />
+          <SlideStage
+            slide={slide}
+            theme={project.theme}
+            assets={assets}
+            animationNonce={animationPreview?.nonce ?? 0}
+            previewElementId={animationPreview?.elementId}
+          />
         </div>
 
         {/* 互動命中層（同尺度，design-px 座標） */}
@@ -267,6 +350,10 @@ export function EditorCanvas() {
               <div
                 key={el.id}
                 onPointerDown={(e) => onElementDown(el, e)}
+                onDoubleClick={(e) => {
+                  e.stopPropagation();
+                  startInlineEdit(el, e);
+                }}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
@@ -367,6 +454,50 @@ export function EditorCanvas() {
           <button className="csg-btn-sm" style={{ color: "#ff6b6b" }} onClick={() => { deleteSelected(); closeMenu(); }}>刪除物件</button>
         </div>
       )}
+
+      {/* 就地文字編輯 */}
+      {editing && (() => {
+        const target = slide.elements.find((x) => x.id === editing.id);
+        if (!target) return null;
+        const r = screenRectFor(target);
+        return (
+          <textarea
+            ref={editorRef}
+            data-inline-editor="1"
+            defaultValue={editing.text}
+            onBlur={commitInlineEdit}
+            onKeyDown={(e) => {
+              if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+                e.preventDefault();
+                commitInlineEdit();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                setEditing(null);
+              }
+            }}
+            style={{
+              position: "absolute",
+              left: r.left,
+              top: r.top,
+              width: Math.max(80, r.width),
+              height: Math.max(36, r.height),
+              zIndex: 12000,
+              resize: "none",
+              background: "rgba(8,10,16,.92)",
+              color: "var(--app-text)",
+              border: "1px solid var(--app-accent)",
+              borderRadius: 6,
+              padding: 8,
+              fontSize: Math.max(
+                12,
+                (target.type === "text" || target.type === "list" ? target.style.fontSize : 28) * scale,
+              ),
+              lineHeight: "1.4",
+              fontFamily: "inherit",
+            }}
+          />
+        );
+      })()}
     </div>
   );
 }

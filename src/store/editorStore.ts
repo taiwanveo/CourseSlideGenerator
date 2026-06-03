@@ -6,6 +6,11 @@ import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
 import { current, isDraft } from "immer";
 import type { AssetRef, Element, NamedSnapshot, Project, Slide, Transform } from "../model/types";
+import {
+  mergeAppendProject,
+  projectForReplace,
+  type ImportMode,
+} from "../engine/import/project";
 import { createBlankProject, createBlankSlide, createImageElement, findElement } from "../model/factory";
 
 const HISTORY_LIMIT = 80;
@@ -13,14 +18,23 @@ const HISTORY_LIMIT = 80;
 export interface EditorState {
   project: Project;
   currentSlideId: string;
+  selectedSlideIds: string[];
+  slideSelectionAnchorId: string | null;
   selection: string[]; // element ids
   past: Project[];
   future: Project[];
   zoom: number; // 0 = fit
   snapshots: NamedSnapshot[];
+  animationPreview: { elementId: string; nonce: number } | null;
   // actions
   loadProject: (p: Project) => void;
+  importProject: (incoming: Project, mode: ImportMode) => void;
   selectSlide: (slideId: string) => void;
+  setSlideSelection: (slideIds: string[], anchorId?: string | null) => void;
+  toggleSlideSelection: (slideId: string) => void;
+  selectSlideRangeTo: (slideId: string) => void;
+  selectAllSlides: () => void;
+  clearSlideSelection: () => void;
   selectElements: (ids: string[]) => void;
   toggleSelect: (id: string, additive: boolean) => void;
   clearSelection: () => void;
@@ -32,7 +46,9 @@ export interface EditorState {
   deleteSelected: () => void;
   addSlide: () => void;
   deleteSlide: (slideId: string) => void;
+  deleteSlides: (slideIds: string[]) => void;
   moveSlide: (slideId: string, dir: -1 | 1) => void;
+  moveSlideToIndex: (slideId: string, toIndex: number) => void;
   reorderElement: (id: string, dir: "front" | "back" | "forward" | "backward") => void;
   setTheme: (themeId: string) => void;
   setThemeOverrides: (overrides: Record<string, string>) => void;
@@ -49,6 +65,7 @@ export interface EditorState {
   saveSnapshot: (name: string) => void;
   restoreSnapshot: (snapshotId: string) => void;
   deleteSnapshot: (snapshotId: string) => void;
+  previewElementAnimation: (elementId: string) => void;
   undo: () => void;
   redo: () => void;
   commit: () => void;
@@ -78,25 +95,95 @@ export const useEditor = create<EditorState>()(
   immer((set) => ({
     project: initialProject,
     currentSlideId: initialProject.deck.slides[0]!.id,
+    selectedSlideIds: [initialProject.deck.slides[0]!.id],
+    slideSelectionAnchorId: initialProject.deck.slides[0]!.id,
     selection: [],
     past: [],
     future: [],
     zoom: 0,
     snapshots: [],
+    animationPreview: null,
 
     loadProject: (p) =>
       set((s) => {
         s.project = p;
         s.currentSlideId = p.deck.slides[0]?.id ?? "";
+        s.selectedSlideIds = p.deck.slides[0]?.id ? [p.deck.slides[0].id] : [];
+        s.slideSelectionAnchorId = p.deck.slides[0]?.id ?? null;
         s.selection = [];
         s.past = [];
+        s.future = [];
+      }),
+
+    importProject: (incoming, mode) =>
+      set((s) => {
+        snapshot(s);
+        if (mode === "replace") {
+          const next = projectForReplace(incoming);
+          s.project = next;
+          s.currentSlideId = next.deck.slides[0]?.id ?? "";
+          s.selectedSlideIds = next.deck.slides[0]?.id ? [next.deck.slides[0].id] : [];
+          s.slideSelectionAnchorId = next.deck.slides[0]?.id ?? null;
+        } else {
+          const { project: merged, firstNewSlideId } = mergeAppendProject(s.project, incoming);
+          s.project = merged;
+          if (firstNewSlideId) {
+            s.currentSlideId = firstNewSlideId;
+            s.selectedSlideIds = [firstNewSlideId];
+            s.slideSelectionAnchorId = firstNewSlideId;
+          }
+        }
+        s.selection = [];
         s.future = [];
       }),
 
     selectSlide: (slideId) =>
       set((s) => {
         s.currentSlideId = slideId;
+        s.selectedSlideIds = [slideId];
+        s.slideSelectionAnchorId = slideId;
         s.selection = [];
+      }),
+
+    setSlideSelection: (slideIds, anchorId = null) =>
+      set((s) => {
+        const valid = new Set(s.project.deck.slides.map((x) => x.id));
+        s.selectedSlideIds = slideIds.filter((id) => valid.has(id));
+        s.slideSelectionAnchorId = anchorId;
+      }),
+
+    toggleSlideSelection: (slideId) =>
+      set((s) => {
+        const i = s.selectedSlideIds.indexOf(slideId);
+        if (i >= 0) s.selectedSlideIds.splice(i, 1);
+        else s.selectedSlideIds.push(slideId);
+        if (s.selectedSlideIds.length === 0) s.selectedSlideIds = [slideId];
+        s.currentSlideId = slideId;
+        s.slideSelectionAnchorId = slideId;
+      }),
+
+    selectSlideRangeTo: (slideId) =>
+      set((s) => {
+        const slides = s.project.deck.slides;
+        const anchor = s.slideSelectionAnchorId ?? s.currentSlideId;
+        const a = slides.findIndex((x) => x.id === anchor);
+        const b = slides.findIndex((x) => x.id === slideId);
+        if (a < 0 || b < 0) return;
+        const [start, end] = a <= b ? [a, b] : [b, a];
+        s.selectedSlideIds = slides.slice(start, end + 1).map((x) => x.id);
+        s.currentSlideId = slideId;
+      }),
+
+    selectAllSlides: () =>
+      set((s) => {
+        s.selectedSlideIds = s.project.deck.slides.map((x) => x.id);
+        s.slideSelectionAnchorId = s.currentSlideId;
+      }),
+
+    clearSlideSelection: () =>
+      set((s) => {
+        s.selectedSlideIds = s.currentSlideId ? [s.currentSlideId] : [];
+        s.slideSelectionAnchorId = s.currentSlideId || null;
       }),
 
     selectElements: (ids) =>
@@ -209,6 +296,8 @@ export const useEditor = create<EditorState>()(
         const idx = s.project.deck.slides.findIndex((x) => x.id === s.currentSlideId);
         s.project.deck.slides.splice(idx + 1, 0, slide);
         s.currentSlideId = slide.id;
+        s.selectedSlideIds = [slide.id];
+        s.slideSelectionAnchorId = slide.id;
         s.selection = [];
       }),
 
@@ -218,10 +307,33 @@ export const useEditor = create<EditorState>()(
         snapshot(s);
         const idx = s.project.deck.slides.findIndex((x) => x.id === slideId);
         s.project.deck.slides.splice(idx, 1);
+        s.selectedSlideIds = s.selectedSlideIds.filter((id) => id !== slideId);
         if (s.currentSlideId === slideId) {
           const next = s.project.deck.slides[Math.max(0, idx - 1)];
           s.currentSlideId = next ? next.id : "";
+          s.selectedSlideIds = next ? [next.id] : [];
+          s.slideSelectionAnchorId = next?.id ?? null;
+        } else if (s.selectedSlideIds.length === 0) {
+          s.selectedSlideIds = s.currentSlideId ? [s.currentSlideId] : [];
+          s.slideSelectionAnchorId = s.currentSlideId || null;
         }
+      }),
+
+    deleteSlides: (slideIds) =>
+      set((s) => {
+        if (slideIds.length === 0) return;
+        const unique = Array.from(new Set(slideIds));
+        const keepAtLeast = 1;
+        if (s.project.deck.slides.length - unique.length < keepAtLeast) return;
+        snapshot(s);
+        const removeSet = new Set(unique);
+        s.project.deck.slides = s.project.deck.slides.filter((x) => !removeSet.has(x.id));
+        if (!s.project.deck.slides.some((x) => x.id === s.currentSlideId)) {
+          s.currentSlideId = s.project.deck.slides[0]?.id ?? "";
+        }
+        s.selectedSlideIds = s.currentSlideId ? [s.currentSlideId] : [];
+        s.slideSelectionAnchorId = s.currentSlideId || null;
+        s.project.meta.updatedAt = Date.now();
       }),
 
     moveSlide: (slideId, dir) =>
@@ -233,6 +345,19 @@ export const useEditor = create<EditorState>()(
         snapshot(s);
         const [item] = slides.splice(idx, 1);
         if (item) slides.splice(target, 0, item);
+      }),
+
+    moveSlideToIndex: (slideId, toIndex) =>
+      set((s) => {
+        const slides = s.project.deck.slides;
+        const from = slides.findIndex((x) => x.id === slideId);
+        if (from < 0) return;
+        const clamped = Math.max(0, Math.min(slides.length - 1, toIndex));
+        if (from === clamped) return;
+        snapshot(s);
+        const [item] = slides.splice(from, 1);
+        if (item) slides.splice(clamped, 0, item);
+        s.project.meta.updatedAt = Date.now();
       }),
 
     reorderElement: (id, dir) =>
@@ -356,12 +481,20 @@ export const useEditor = create<EditorState>()(
         snapshot(s);
         s.project = structuredCloneSafe(snap.project);
         s.currentSlideId = s.project.deck.slides[0]?.id ?? "";
+        s.selectedSlideIds = s.project.deck.slides[0]?.id ? [s.project.deck.slides[0].id] : [];
+        s.slideSelectionAnchorId = s.project.deck.slides[0]?.id ?? null;
         s.selection = [];
       }),
 
     deleteSnapshot: (snapshotId) =>
       set((s) => {
         s.snapshots = s.snapshots.filter((x) => x.id !== snapshotId);
+      }),
+
+    previewElementAnimation: (elementId) =>
+      set((s) => {
+        const prevNonce = s.animationPreview?.nonce ?? 0;
+        s.animationPreview = { elementId, nonce: prevNonce + 1 };
       }),
 
     setTitle: (title) =>
@@ -379,6 +512,8 @@ export const useEditor = create<EditorState>()(
         if (!currentSlide(s.project, s.currentSlideId)) {
           s.currentSlideId = s.project.deck.slides[0]?.id ?? "";
         }
+        s.selectedSlideIds = s.currentSlideId ? [s.currentSlideId] : [];
+        s.slideSelectionAnchorId = s.currentSlideId || null;
         s.selection = [];
       }),
 
@@ -388,6 +523,8 @@ export const useEditor = create<EditorState>()(
         if (!next) return;
         s.past.push(structuredCloneSafe(s.project));
         s.project = next;
+        s.selectedSlideIds = s.currentSlideId ? [s.currentSlideId] : [];
+        s.slideSelectionAnchorId = s.currentSlideId || null;
         s.selection = [];
       }),
 
