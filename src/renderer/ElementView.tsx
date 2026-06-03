@@ -113,8 +113,16 @@ function renderRich(rt: RichText) {
   ));
 }
 
+function isTitleLikeElement(el: TextElement): boolean {
+  const size = el.style.fontSize;
+  const weight = el.style.fontWeight ?? 400;
+  if (size >= 200) return false;
+  return size >= 84 || (weight >= 700 && size >= 52 && size < 120);
+}
+
 function TextInner({ el }: { el: TextElement }) {
   const valign = el.style.valign ?? "top";
+  const titleLike = isTitleLikeElement(el);
   const content = <div>{renderRich(el.content)}</div>;
   const legacyHref = (el as unknown as { href?: string }).href;
   const link = el.link ?? (legacyHref ? { kind: "url" as const, value: legacyHref, target: "blank" as const } : undefined);
@@ -128,9 +136,10 @@ function TextInner({ el }: { el: TextElement }) {
         flexDirection: "column",
         justifyContent:
           valign === "middle" ? "center" : valign === "bottom" ? "flex-end" : "flex-start",
-        whiteSpace: "pre-wrap",
-        wordBreak: "break-word",
+        whiteSpace: titleLike ? "nowrap" : "pre-wrap",
+        wordBreak: titleLike ? "normal" : "break-word",
         overflow: "hidden",
+        textOverflow: titleLike ? "clip" : undefined,
       }}
     >
       {link ? (

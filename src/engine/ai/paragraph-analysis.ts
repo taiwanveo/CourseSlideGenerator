@@ -146,9 +146,9 @@ export function fallbackAnalyzeParagraph(index: number, source: string): Analyze
 
 function deriveTitleFromBullets(bullets: string[], source: string): string {
   const first = bullets[0]?.trim() ?? source.trim();
-  if (first.length <= 22) return first;
-  const cut = first.slice(0, 20).trim();
-  return cut.endsWith("…") ? cut : `${cut}…`;
+  const clause = first.split(/[，,：:；;]/)[0]?.trim() ?? first;
+  if (clause.length >= 6 && clause.length <= 36) return clause;
+  return first;
 }
 
 /** 逐段分析結果 → 投影片規格（一段至少一頁）。 */

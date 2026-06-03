@@ -464,9 +464,5 @@ function splitTitleAndBody(text: string): { title: string; points: string[] } {
     return { title: sentenceSplit[1]!.trim(), points: [sentenceSplit[2]!.trim()] };
   }
 
-  if (trimmed.length > 28) {
-    return { title: `${trimmed.slice(0, 26).trim()}…`, points: [trimmed] };
-  }
-
-  return { title: trimmed, points: [] };
+  return { title: trimmed, points: trimmed.length > 28 ? [trimmed] : [] };
 }

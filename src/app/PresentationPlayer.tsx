@@ -1,6 +1,6 @@
 /**
- * 全螢幕播放簡報 — 以共用 SlideStage 等比置中顯示，支援方向鍵 / 空白鍵 / 點擊切頁、
- * ESC 離開、滑鼠靜止自動隱藏控制列。盡量呼叫瀏覽器全螢幕 API（Tauri 視窗亦適用）。
+ * 全螢幕播放簡報 — 以共用 SlideStage 等比置中顯示，支援方向鍵 / 空白鍵、
+ * 左側 40% 點擊上一頁、右側 40% 點擊下一頁、ESC 離開、滑鼠靜止自動隱藏控制列。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CANVAS_HEIGHT, CANVAS_WIDTH } from "../model/types";
@@ -180,21 +180,31 @@ export function PresentationPlayer({ onClose }: { onClose: () => void }) {
     setElementAnimSeq((s) => s + 1);
   }, [idx]);
 
+  const handleRootClick = useCallback(
+    (e: React.MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.closest("[data-csg-player-controls]")) return;
+
+      const linkEl = target.closest("[data-csg-link='1']") as HTMLElement | null;
+      if (linkEl) {
+        const kind = linkEl.dataset.csgLinkKind;
+        const value = linkEl.dataset.csgLinkValue;
+        if (kind === "slide" && value) goToSlideId(value);
+        return;
+      }
+
+      const ratio = e.clientX / window.innerWidth;
+      if (ratio <= 0.4) go(-1);
+      else if (ratio >= 0.6) go(1);
+    },
+    [go, goToSlideId],
+  );
+
   return (
     <div
       ref={rootRef}
       onMouseMove={pokeControls}
-      onClick={(e) => {
-        const target = e.target as HTMLElement;
-        const linkEl = target.closest("[data-csg-link='1']") as HTMLElement | null;
-        if (linkEl) {
-          const kind = linkEl.dataset.csgLinkKind;
-          const value = linkEl.dataset.csgLinkValue;
-          if (kind === "slide" && value) goToSlideId(value);
-          return;
-        }
-        go(1);
-      }}
+      onClick={handleRootClick}
       style={{
         position: "fixed",
         inset: 0,
@@ -241,6 +251,7 @@ export function PresentationPlayer({ onClose }: { onClose: () => void }) {
 
       {/* 控制列 */}
       <div
+        data-csg-player-controls="1"
         onClick={(e) => e.stopPropagation()}
         style={{
           position: "fixed",

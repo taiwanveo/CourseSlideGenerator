@@ -21,6 +21,7 @@ import {
   buildIntentFromBrief,
   splitLargeBriefs,
 } from "./slide-briefs";
+import { applyTitleRefinements, refineLongTitles } from "./title-refine";
 import { translateDeck } from "../layout/translate";
 import { chat } from "../llm/client";
 import { requestJson } from "../llm/json";
@@ -120,6 +121,13 @@ export async function generatePresentation(input: GenerateInput): Promise<Projec
     onProgress,
     pageStrategy: input.pageStrategy,
   });
+
+  const titleRefined = await refineLongTitles(
+    analyzed.map((p) => ({ index: p.index, title: p.title, source: p.source })),
+    creds,
+    { signal, onProgress },
+  );
+  applyTitleRefinements(analyzed, titleRefined);
 
   const outline: OutlineNode[] = outlineFromParagraphAnalysis(analyzed);
 

@@ -163,7 +163,7 @@ export function buildPatchIntentForRequirement(req: OutlineRequirement): LayoutI
 
   const sectionTitle = sectionTitleFromPath(req.path);
   return {
-    slideTitle: req.text.length > 48 ? `${req.text.slice(0, 48)}…` : req.text,
+    slideTitle: req.text,
     presetId: "bullet-list",
     reason: "coverage-patcher:keypoint",
     slots: [

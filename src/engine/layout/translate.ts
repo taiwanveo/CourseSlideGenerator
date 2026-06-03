@@ -22,6 +22,11 @@ import {
   type SlotRole,
 } from "./preset-types";
 import { FALLBACK_PRESET_ID, getPreset } from "./presets";
+import {
+  estimateWrappedLines,
+  fitAllTitleElementsToSingleLine,
+  isTitleLikeText,
+} from "./text-fit";
 
 export interface TranslateContext {
   motionDefaults: MotionDefaults;
@@ -178,6 +183,7 @@ export function translateIntentToSlide(
 
   applyEmphasis(elements, intent.emphasisPoints, ctx.motionDefaults.emphasis);
 
+  fitAllTitleElementsToSingleLine(elements);
   fitTextElementHeights(elements);
   reflowVerticalStack(elements);
 
@@ -203,23 +209,10 @@ export function translateDeck(
   return intents.map((i) => translateIntentToSlide(i, ctx));
 }
 
-function charsPerLine(width: number, fontSize: number): number {
-  return Math.max(1, Math.floor(width / Math.max(1, fontSize * 0.92)));
-}
-
-function estimateWrappedLines(text: string, width: number, fontSize: number): number {
-  const parts = text.split(/\n/);
-  let lines = 0;
-  for (const part of parts) {
-    const len = part.trim().length;
-    lines += len === 0 ? 0 : Math.ceil(len / charsPerLine(width, fontSize));
-  }
-  return Math.max(1, lines);
-}
-
 function fitTextElementHeights(elements: Element[]): void {
   for (const el of elements) {
     if (el.type === "text") {
+      if (isTitleLikeText(el)) continue;
       const text = el.content.spans.map((s) => s.text).join("");
       const { fontSize, lineHeight } = el.style;
       let size = fontSize;
