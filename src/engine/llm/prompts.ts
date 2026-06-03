@@ -143,3 +143,127 @@ ${pageHint}
 
 ${payloadJson}${imgPrompt}`;
 }
+
+export function ARTICLE_TO_STRUCTURE_SYSTEM(
+  pageStrategy: "compact" | "balanced" | "full" = "full",
+): string {
+  const coverageRule =
+    pageStrategy === "full"
+      ? `【鐵律｜full 教學完整模式】
+- 原文的每一段（以【段落 N】標號）都必須至少出現在某張 slide 的 sourceRefs 中，不得遺漏。
+- 不可在 omitted 中省略任何段落；omitted 必須為空陣列 []。
+- 可重組敘事順序，但所有知識點都要進入 keyPoints。
+- 寧可投影片數量多，不可刪除知識點。`
+      : pageStrategy === "balanced"
+        ? `【鐵律｜balanced 平衡模式】
+- 至少 90% 的原文段落必須出現在 sourceRefs 中。
+- 僅可省略重複、極弱或與主旨無關的段落，並列入 omitted 且說明 reason。
+- 優先訊息驅動標題與清晰敘事，但保留主要知識點。`
+        : `【鐵律｜compact 精簡模式】
+- 聚焦核心論述，可合併段落；omitted 需說明原因。
+- 目標精簡投影片數量，但 coreMessage 須準確。`;
+
+  return `你是教學簡報架構設計師（article_to_presentation_structure）。
+任務：把長文轉成「簡報邏輯」，不是逐段摘要。須提取論點、重組敘事、設計 slide-level 結構。
+
+${coverageRule}
+
+【流程】
+1. 判斷簡報情境（受眾、目的、語氣）→ objective, audience
+2. 提取核心訊息 → coreMessage（一句話）
+3. 選敘事弧 → narrativeFlow（如 Problem→Solution、What→Why→How）
+4. 為每張 slide 產出：
+   - title：訊息驅動標題（結論句，非「概述」「背景」）
+   - mainMessage：本頁唯一主張
+   - keyPoints：3–7 條，保留術語/數字/步驟，不可整段複製
+   - suggestedVisual：title|agenda|section-divider|executive-summary|bullet-list|comparison|timeline|process|framework|chart|case|quote|problem|recommendation|closing|image-focus
+   - speakerNote：講者口語說明（可比 slide 上文字更詳）
+   - sourceRefs：對應【段落 N】的 N 整數陣列
+   - kind：title|section|chapter（可選）
+
+【品質】
+- 繁體中文（台灣用語）
+- 禁止標題用省略號（… 或 ...）
+- 不要新增原文沒有的事實
+
+輸出 JSON：
+{"objective":"...","audience":"...","coreMessage":"...","narrativeFlow":"...","slides":[{"slideNo":1,"title":"...","mainMessage":"...","keyPoints":["..."],"suggestedVisual":"bullet-list","speakerNote":"...","sourceRefs":[0],"kind":"section"}],"omitted":[]}
+只輸出單一合法 JSON 物件。`;
+}
+
+export function userArticleToStructurePrompt(
+  content: string,
+  paragraphs: string[],
+  opts?: {
+    pageStrategy?: "compact" | "balanced" | "full";
+    deckStyle?: "teaching" | "business" | "academic" | "casual";
+    emphasisKeywords?: string[];
+  },
+): string {
+  const paraBlock = paragraphs
+    .map((p, i) => `【段落 ${i}】\n${p.slice(0, 1200)}`)
+    .join("\n\n");
+  const style =
+    opts?.deckStyle === "business"
+      ? "商務簡報"
+      : opts?.deckStyle === "academic"
+        ? "學術報告"
+        : opts?.deckStyle === "casual"
+          ? "輕鬆分享"
+          : "教學簡報";
+  const kw =
+    opts?.emphasisKeywords?.length ? `\n強調關鍵詞：${opts.emphasisKeywords.join("、")}` : "";
+  return `模式：${opts?.pageStrategy ?? "full"}｜風格：${style}${kw}
+
+【段落索引清單】（sourceRefs 必須引用此處的段落編號）
+${paraBlock}
+
+【完整內文】
+${content.slice(0, 24000)}`;
+}
+
+export const PRESENTATION_GENERATION_SYSTEM = `你是教學簡報內容設計師（presentation_generation）。
+輸入為已規劃好的簡報架構（每頁含 title、mainMessage、keyPoints、suggestedVisual、speakerNote）。
+任務：為每一頁選擇合適版型並填滿槽位，產出可放映的投影片語意層。你只負責語意，不算座標。
+
+可用版型清單：
+${presetCatalogForPrompt()}
+
+【鐵律】
+- 每一筆架構 slide 對應一張投影片，不可合併或跳過
+- title 槽放短標題；keyPoints 全部進入 bullets 槽（listItems），不可刪減
+- speakerNote 與 mainMessage 寫入 reason 欄位（講者備註）
+- presetId 必須來自版型清單；有 imageAssetIds 時用 text-left-image-right 並填 image 槽
+- 繁體中文；禁止省略號截斷
+
+輸出 JSON：
+{"slides":[{"slideTitle":"...","presetId":"...","reason":"講者備註\\n\\n核心訊息","slots":[...],"emphasisPoints":[]}]}
+只輸出單一合法 JSON 物件。`;
+
+export function userPresentationGenerationPrompt(
+  structure: { objective: string; coreMessage: string; narrativeFlow: string },
+  chunk: Array<{
+    slideNo: number;
+    title: string;
+    mainMessage: string;
+    keyPoints: string[];
+    suggestedVisual: string;
+    speakerNote?: string;
+    imageAssetIds?: string[];
+    kind?: string;
+  }>,
+  availableImages?: { id: string; name: string }[],
+  opts?: { deckStyle?: string; pageStrategy?: string },
+): string {
+  let img = "";
+  if (availableImages?.length) {
+    img = `\n【附圖】\n${JSON.stringify(availableImages, null, 2)}`;
+  }
+  return `簡報目的：${structure.objective}
+核心訊息：${structure.coreMessage}
+敘事：${structure.narrativeFlow}
+風格：${opts?.deckStyle ?? "teaching"}｜頁數策略：${opts?.pageStrategy ?? "full"}
+
+請為以下 ${chunk.length} 張架構 slide 各產出一張投影片 JSON：
+${JSON.stringify(chunk, null, 2)}${img}`;
+}

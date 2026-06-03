@@ -1,7 +1,11 @@
 import { useRef, useState, type ReactNode } from "react";
 import { generatePresentation } from "../engine/ai/generate";
 import { parseFile, parsePastedText, parseUrl, type ParsedImage } from "../engine/import/parse-document";
-import type { GenerationQualityReport, OutlineCoverageReport } from "../model/types";
+import type {
+  GenerationQualityReport,
+  OutlineCoverageReport,
+  PresentationStructureMeta,
+} from "../model/types";
 import { isTauri } from "../platform";
 import { useEditor } from "../store/editorStore";
 import { useSettings } from "../store/settingsStore";
@@ -34,7 +38,8 @@ export function GeneratePanel({ onClose }: Props) {
   const [showCoverageDetails, setShowCoverageDetails] = useState(false);
   const [showQualityDetails, setShowQualityDetails] = useState(false);
   const [deckStyle, setDeckStyle] = useState<"teaching" | "business" | "academic" | "casual">("teaching");
-  const [pageStrategy, setPageStrategy] = useState<"compact" | "balanced" | "full">("balanced");
+  const [pageStrategy, setPageStrategy] = useState<"compact" | "balanced" | "full">("full");
+  const [structureMeta, setStructureMeta] = useState<PresentationStructureMeta | null>(null);
   const [emphasisKeywords, setEmphasisKeywords] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -75,6 +80,7 @@ export function GeneratePanel({ onClose }: Props) {
     setError(null);
     setCoverage(null);
     setQuality(null);
+    setStructureMeta(null);
     setShowCoverageDetails(false);
     setShowQualityDetails(false);
     const creds = settings.credentials();
@@ -107,6 +113,7 @@ export function GeneratePanel({ onClose }: Props) {
       loadProject(project);
       setCoverage(project.source.coverage ?? null);
       setQuality(project.source.quality ?? null);
+      setStructureMeta(project.source.presentationStructure ?? null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "生成失敗");
     } finally {
@@ -201,8 +208,11 @@ export function GeneratePanel({ onClose }: Props) {
           <select className="csg-select" value={pageStrategy} onChange={(e) => setPageStrategy(e.target.value as typeof pageStrategy)}>
             <option value="compact">精簡</option>
             <option value="balanced">平衡</option>
-            <option value="full">完整覆蓋優先</option>
+            <option value="full">完整教學（每段必出現，不遺漏）</option>
           </select>
+          <p style={{ fontSize: 12, color: "var(--app-muted)", margin: "4px 0 0" }}>
+            full：Skill 1 重組敘事且每段必在簡報中；balanced：可省略弱段落；compact：精簡頁數。
+          </p>
 
           <label className="csg-field-label">重點關鍵詞（可選）</label>
           <input
@@ -227,10 +237,10 @@ export function GeneratePanel({ onClose }: Props) {
           >
             {stage && <span style={{ fontSize: 13, color: "var(--app-muted)" }}>{stage}</span>}
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, flexWrap: "wrap" }}>
-              {(coverage || quality) && (
+              {(coverage || quality || structureMeta) && (
                 <button
                   className="csg-btn"
-                  onClick={() => exportQualityReport(coverage, quality)}
+                  onClick={() => exportQualityReport(coverage, quality, structureMeta)}
                   disabled={busy}
                   title="匯出覆蓋率與品質檢查報告"
                 >
@@ -249,6 +259,42 @@ export function GeneratePanel({ onClose }: Props) {
       </div>
 
       {error && <div style={{ color: "#ff6b6b", fontSize: 13, marginTop: 12 }}>{error}</div>}
+      {structureMeta && (
+        <div
+          style={{
+            marginTop: 12,
+            padding: 12,
+            borderRadius: 10,
+            border: "1px solid var(--app-border)",
+            background: "var(--app-canvas-bg)",
+            fontSize: 13,
+            lineHeight: 1.6,
+          }}
+        >
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>簡報架構（Skill 1）</div>
+          <div>
+            <strong>核心訊息：</strong>
+            {structureMeta.coreMessage || "—"}
+          </div>
+          <div>
+            <strong>敘事流程：</strong>
+            {structureMeta.narrativeFlow || "—"}
+          </div>
+          <div>
+            <strong>受眾：</strong>
+            {structureMeta.audience}｜<strong>投影片數：</strong>
+            {structureMeta.slideCount}
+            {structureMeta.structureCoveragePercent != null &&
+              `｜段落覆蓋率：${structureMeta.structureCoveragePercent}%`}
+          </div>
+          {structureMeta.omittedCount > 0 && (
+            <div style={{ color: "#e6a23c" }}>
+              已省略 {structureMeta.omittedCount} 段（balanced/compact 模式）
+            </div>
+          )}
+          <div style={{ color: "var(--app-muted)", marginTop: 4 }}>{structureMeta.objective}</div>
+        </div>
+      )}
       {coverage && (
         <div
           style={{
@@ -338,9 +384,11 @@ export function GeneratePanel({ onClose }: Props) {
 function exportQualityReport(
   coverage: OutlineCoverageReport | null,
   quality: GenerationQualityReport | null,
+  structure: PresentationStructureMeta | null,
 ): void {
   const payload = {
     generatedAt: new Date().toISOString(),
+    presentationStructure: structure,
     coverage,
     quality,
   };

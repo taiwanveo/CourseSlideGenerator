@@ -16,6 +16,10 @@ export interface SlideBrief {
   imageAssetId?: string;
   /** 對應原文第幾段（逐段分析時使用） */
   paragraphIndex?: number;
+  /** 本頁核心訊息（Stage 1） */
+  mainMessage?: string;
+  /** 講者備註（Stage 2） */
+  speakerNote?: string;
 }
 
 const PUNCT_RE = /[\s，。、；：！？""''（）\[\]【】《》\-—·…,.;:!?'"()]/g;
@@ -321,10 +325,11 @@ export function buildIntentFromBrief(spec: SlideBrief): LayoutIntent {
     slots.push({ slotName: "image", contentType: "image", imageAssetId: spec.imageAssetId });
   }
 
+  const noteParts = [spec.mainMessage, spec.speakerNote].filter(Boolean);
   return {
     slideTitle: spec.title,
     presetId,
-    reason: "spec-section",
+    reason: noteParts.length > 0 ? noteParts.join("\n\n") : "spec-section",
     slots,
     emphasisPoints: spec.keyPoints.filter((_, idx) => idx < 3),
   };

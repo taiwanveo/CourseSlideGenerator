@@ -47,10 +47,23 @@ export interface GenerationQualityReport {
   splitSlidesAdded: number;
 }
 
+/** Stage 1 簡報架構（article_to_presentation_structure 輸出摘要）。 */
+export interface PresentationStructureMeta {
+  objective: string;
+  audience: string;
+  coreMessage: string;
+  narrativeFlow: string;
+  slideCount: number;
+  omittedCount: number;
+  structureCoveragePercent?: number;
+}
+
 export interface ProjectSource {
   originalText: string;
   translatedText: string;
   outline: OutlineNode[];
+  /** Stage 1 簡報架構 meta（供 UI 顯示） */
+  presentationStructure?: PresentationStructureMeta;
   /** 最近一次 AI 生成的大綱覆蓋率（補頁後應接近 100%） */
   coverage?: OutlineCoverageReport;
   quality?: GenerationQualityReport;

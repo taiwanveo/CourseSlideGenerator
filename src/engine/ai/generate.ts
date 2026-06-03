@@ -1,33 +1,31 @@
 /**
- * AI 生成流程：原文 → 繁中整理 → 逐段分析 → 版型意圖 → 物件樹 Project。
+ * AI 生成流程：原文 → 簡報架構（Skill 1）→ 投影片內容（Skill 2）→ 物件樹 Project。
  */
 import { DEFAULT_MOTION, createBlankProject, newId } from "../../model/factory";
-import type { OutlineNode, Project, AssetRef, GenerationQualityReport } from "../../model/types";
+import type {
+  OutlineNode,
+  Project,
+  AssetRef,
+  GenerationQualityReport,
+  PresentationStructureMeta,
+} from "../../model/types";
 import type { LayoutIntent } from "../layout/intent";
 import { buildPatchIntentForRequirement, ensureOutlineCoverage } from "./outline-coverage";
+import { splitArticleParagraphs } from "./paragraph-analysis";
+import { appendMissingImageMarkers, replaceImagePlaceholders } from "./image-placement";
 import {
-  analyzeParagraphsInBatches,
-  outlineFromParagraphAnalysis,
-  paragraphsToSlideBriefs,
-  splitArticleParagraphs,
-} from "./paragraph-analysis";
-import {
-  appendMissingImageMarkers,
-  insertAllImagesIntoBriefs,
-  replaceImagePlaceholders,
-  stripImageMarkers,
-} from "./image-placement";
-import {
-  buildIntentFromBrief,
-  splitLargeBriefs,
-} from "./slide-briefs";
-import { applyTitleRefinements, refineLongTitles } from "./title-refine";
+  assignImagesToStructure,
+  buildPresentationStructure,
+  reconcileStructureCoverage,
+  splitLargeStructureSlides,
+  structureToOutline,
+} from "./presentation-structure";
+import { generateSlidesFromStructure } from "./presentation-generate";
+import { refineLongTitles } from "./title-refine";
 import { translateDeck } from "../layout/translate";
 import { chat } from "../llm/client";
 import { requestJson } from "../llm/json";
-import {
-  TRANSLATE_SYSTEM,
-} from "../llm/prompts";
+import { TRANSLATE_SYSTEM } from "../llm/prompts";
 import type { ProviderCredentials } from "../llm/types";
 import type { ParsedImage } from "../import/parse-document";
 
@@ -35,17 +33,11 @@ export interface GenerateInput {
   rawText: string;
   title?: string;
   creds: ProviderCredentials;
-  /** 是否需要翻譯整理（非中文或想潤飾時開啟） */
   refine?: boolean;
-  /** 原始素材內含的圖片（鐵律：不得捨棄，放入簡報） */
   images?: ParsedImage[];
-  /** 覆蓋率最低門檻（50-100），低於此值將啟動強制補頁。 */
   minCoverageThreshold?: number;
-  /** 生成風格控制。 */
   deckStyle?: "teaching" | "business" | "academic" | "casual";
-  /** 頁數策略：compact 精簡 / balanced 平衡 / full 完整。 */
   pageStrategy?: "compact" | "balanced" | "full";
-  /** 需強調的關鍵詞。 */
   emphasisKeywords?: string[];
   signal?: AbortSignal;
   onProgress?: (stage: string) => void;
@@ -61,16 +53,38 @@ function buildImageAssetMap(assets: AssetRef[]): Record<string, { width?: number
   return map;
 }
 
+function structureMeta(
+  structure: {
+    objective: string;
+    audience: string;
+    coreMessage: string;
+    narrativeFlow: string;
+    slides: unknown[];
+    omitted: unknown[];
+  },
+  coveragePercent?: number,
+): PresentationStructureMeta {
+  return {
+    objective: structure.objective,
+    audience: structure.audience,
+    coreMessage: structure.coreMessage,
+    narrativeFlow: structure.narrativeFlow,
+    slideCount: structure.slides.length,
+    omittedCount: structure.omitted.length,
+    structureCoveragePercent: coveragePercent,
+  };
+}
+
 export async function generatePresentation(input: GenerateInput): Promise<Project> {
   const { creds, signal, onProgress } = input;
+  const pageStrategy = input.pageStrategy ?? "full";
   const minCoverageThreshold = Math.max(50, Math.min(100, Math.round(input.minCoverageThreshold ?? 90)));
 
-  // 建立 project（唯一真相）
   const project = createBlankProject(input.title ?? "AI 教學簡報");
   project.id = newId("proj");
 
-  // 1. 處理圖片：先全數加入 project.assets
   const imageAssets: AssetRef[] = [];
+  const availableImages: { id: string; name: string }[] = [];
   if (input.images && input.images.length > 0) {
     const seen = new Set<string>();
     let idx = 0;
@@ -88,10 +102,10 @@ export async function generatePresentation(input: GenerateInput): Promise<Projec
       };
       imageAssets.push(asset);
       project.assets.push(asset);
+      availableImages.push({ id: asset.id, name: asset.name });
     }
   }
 
-  // 2. 選擇性整理原文
   let content = input.rawText.trim();
   if (input.refine) {
     onProgress?.("整理內容中…");
@@ -108,57 +122,70 @@ export async function generatePresentation(input: GenerateInput): Promise<Projec
   content = replaceImagePlaceholders(content, imageAssets);
   content = appendMissingImageMarkers(content, imageAssets);
 
-  // 4. 逐段分析：每段先摘要條列，再提煉標題（不可遺漏任何一段）
   const rawParagraphs = splitArticleParagraphs(content);
   if (rawParagraphs.length === 0) {
     throw new Error("無法從文章切出有效段落，請確認內容長度足夠。");
   }
-  const cleanParagraphs = rawParagraphs.map(stripImageMarkers);
 
-  onProgress?.(`逐段分析中…（共 ${cleanParagraphs.length} 段）`);
-  const analyzed = await analyzeParagraphsInBatches(cleanParagraphs, creds, {
+  // Stage 1：article_to_presentation_structure
+  let structure = await buildPresentationStructure(content, rawParagraphs, creds, {
     signal,
     onProgress,
-    pageStrategy: input.pageStrategy,
+    pageStrategy,
+    deckStyle: input.deckStyle,
+    emphasisKeywords: input.emphasisKeywords,
   });
 
+  const { structure: reconciled, report: structCoverage } = reconcileStructureCoverage(
+    structure,
+    rawParagraphs,
+    pageStrategy,
+  );
+  structure = reconciled;
+  if (structCoverage.patchedSlides > 0) {
+    onProgress?.(
+      `架構補段 ${structCoverage.patchedSlides} 張（段落覆蓋率 ${structCoverage.coveragePercent}%）`,
+    );
+  }
+
+  assignImagesToStructure(structure, imageAssets, rawParagraphs);
+  structure = splitLargeStructureSlides(structure, pageStrategy === "compact" ? 5 : 7);
+
   const titleRefined = await refineLongTitles(
-    analyzed.map((p) => ({ index: p.index, title: p.title, source: p.source })),
+    structure.slides.map((s) => ({
+      index: s.slideNo,
+      title: s.title,
+      source: s.mainMessage,
+    })),
     creds,
     { signal, onProgress },
   );
-  applyTitleRefinements(analyzed, titleRefined);
-
-  const outline: OutlineNode[] = outlineFromParagraphAnalysis(analyzed);
-
-  // 5. 依逐段規格組裝投影片（一段至少一頁，條列完整保留）
-  onProgress?.("組裝投影片規格…");
-  let slideBriefs = splitLargeBriefs(paragraphsToSlideBriefs(analyzed), 7);
-  onProgress?.(`分配 ${imageAssets.length} 張附圖…`);
-  slideBriefs = insertAllImagesIntoBriefs(slideBriefs, imageAssets, rawParagraphs);
-
-  let slidesWithCoverage: LayoutIntent[] = slideBriefs.map((b) => buildIntentFromBrief(b));
-  if (slidesWithCoverage.length === 0) {
-    throw new Error("無法從文章產生投影片，請稍後再試。");
+  for (const slide of structure.slides) {
+    const t = titleRefined.get(slide.slideNo);
+    if (t) slide.title = t;
   }
 
-  // 6. 大綱覆蓋率檢查：缺漏節點自動補頁
+  const outline: OutlineNode[] = structureToOutline(structure);
+
+  // Stage 2：presentation_generation
+  onProgress?.("產生投影片內容與版型…");
+  let slidesWithCoverage = await generateSlidesFromStructure(structure, creds, {
+    signal,
+    onProgress,
+    deckStyle: input.deckStyle,
+    pageStrategy,
+    availableImages,
+  });
+
+  if (slidesWithCoverage.length === 0) {
+    throw new Error("無法從簡報架構產生投影片，請稍後再試。");
+  }
+
   onProgress?.("檢查大綱覆蓋率…");
   const coverage = ensureOutlineCoverage(outline, slidesWithCoverage);
   slidesWithCoverage = coverage.intents;
   let coverageReport = coverage.report;
-  if (coverageReport.patchedSlides > 0) {
-    onProgress?.(
-      `自動補頁 ${coverageReport.patchedSlides} 張（覆蓋率 ${coverageReport.coveragePercentBefore}% → ${coverageReport.coveragePercentAfter}%）`,
-    );
-  } else {
-    onProgress?.(`大綱覆蓋率 ${coverageReport.coveragePercentAfter}%`);
-  }
-  if (coverageReport.missingAfterPatch.length > 0) {
-    console.warn("補頁後仍有大綱缺漏:", coverageReport.missingAfterPatch);
-  }
 
-  // 6-2. 若仍低於使用者門檻，啟動強制補頁（每個缺漏節點至少一頁）
   if (coverageReport.coveragePercentAfter < minCoverageThreshold && coverageReport.missingAfterPatch.length > 0) {
     onProgress?.(`覆蓋率低於門檻 ${minCoverageThreshold}% ，啟動強制補頁…`);
     const missingNodes = collectMissingNodes(outline, coverageReport.missingAfterPatch);
@@ -167,15 +194,12 @@ export async function generatePresentation(input: GenerateInput): Promise<Projec
     const recalc = ensureOutlineCoverage(outline, slidesWithCoverage);
     slidesWithCoverage = recalc.intents;
     coverageReport = recalc.report;
-    onProgress?.(`強制補頁完成，覆蓋率提升至 ${coverageReport.coveragePercentAfter}%`);
   }
 
-  // 6-3. 品質補強：事實一致性檢查 + 過密頁面自動拆頁
   onProgress?.("進行品質檢查…");
   const quality = buildQualityReportAndPatchSlides(content, slidesWithCoverage);
   slidesWithCoverage = quality.patchedSlides;
 
-  // 7. 組裝
   onProgress?.("組裝簡報中…");
   const imageMap = buildImageAssetMap(imageAssets);
   const slides = translateDeck(slidesWithCoverage, {
@@ -187,6 +211,7 @@ export async function generatePresentation(input: GenerateInput): Promise<Projec
     originalText: input.rawText,
     translatedText: content,
     outline,
+    presentationStructure: structureMeta(structure, structCoverage.coveragePercent),
     coverage: coverageReport,
     quality: quality.report,
   };
@@ -209,7 +234,7 @@ function collectMissingNodes(
       if (need.has(text)) {
         out.push({ level: node.level, text, path, keyPoint: node.keyPoint, node, parentId, id });
       }
-      if (node.children.length > 0) walk(node.children, path, id);
+      walk(node.children, path, id);
     }
   };
   walk(outline);
@@ -228,7 +253,7 @@ function collectSlideTexts(slide: LayoutIntent): string[] {
     if (slot.listItems?.length) out.push(...slot.listItems);
   }
   if (slide.emphasisPoints?.length) out.push(...slide.emphasisPoints);
-  return out.map((x) => x.trim()).filter(Boolean);
+  return out;
 }
 
 function isDenseSlide(slide: LayoutIntent): boolean {
@@ -311,7 +336,7 @@ function buildQualityReportAndPatchSlides(
   };
 }
 
-/** AI 風格主題生成：根據文字描述，產生一組 CSS 自訂屬性覆寫值。 */
+/** AI 風格主題生成 */
 export async function generateTheme(
   prompt: string,
   creds: ProviderCredentials,
