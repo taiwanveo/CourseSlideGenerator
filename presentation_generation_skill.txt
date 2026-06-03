@@ -1,0 +1,144 @@
+---
+name: presentation_generation
+description: Generate a complete presentation from a structured outline, including slide content, visual layout, speaker notes, design direction, and export-ready slide specifications.
+---
+
+# Presentation Generation Skill
+
+## Purpose
+
+This skill converts a presentation outline into a complete slide deck.
+
+It focuses on slide design, content density, layout, visual hierarchy, speaker notes, and presentation flow.
+
+This skill assumes the main argument and slide structure are already available.
+
+## Input
+
+The user may provide:
+
+- Slide outline
+- Target audience
+- Presentation duration
+- Number of slides
+- Brand or style requirements
+- Language
+- Desired format, such as PowerPoint, Google Slides, PDF, or Markdown
+- Whether speaker notes are needed
+
+## Core Process
+
+### 1. Confirm the presentation goal
+
+Identify:
+
+- Presentation purpose
+- Audience type
+- Expected duration
+- Formality level
+- Knowledge level of audience
+- Desired outcome
+
+### 2. Convert outline into slide content
+
+For each slide, generate:
+
+- Slide title
+- Main message
+- Body content
+- Visual suggestion
+- Layout suggestion
+- Speaker notes
+- Optional transition sentence
+
+Each slide should contain one dominant idea.
+
+### 3. Apply slide design principles
+
+Follow these rules:
+
+- Use message-driven titles
+- Avoid text-heavy slides
+- Prefer diagrams, tables, timelines, charts, and process flows over dense bullets
+- Keep visual hierarchy clear
+- Use consistent terminology
+- Avoid mixing too many ideas on one slide
+- Use progressive disclosure when explaining complex ideas
+
+### 4. Choose slide layout types
+
+Select suitable layouts such as:
+
+- Title slide
+- Agenda slide
+- Section divider
+- Executive summary
+- Key message slide
+- Two-column comparison
+- Three-part framework
+- Timeline
+- Process flow
+- Matrix
+- Chart slide
+- Case study slide
+- Recommendation slide
+- Closing slide
+
+### 5. Generate speaker notes
+
+Speaker notes should:
+
+- Explain the slide naturally
+- Add context not shown on the slide
+- Avoid reading the slide word for word
+- Include transition logic between slides
+- Match the audience’s technical level
+
+### 6. Produce export-ready structure
+
+For each slide, output:
+
+- Slide number
+- Title
+- Layout type
+- On-slide content
+- Visual direction
+- Speaker notes
+- Design notes
+
+## Output Format
+
+```md
+# Presentation Deck
+
+## Deck Information
+
+- Title:
+- Audience:
+- Duration:
+- Number of slides:
+- Style:
+- Language:
+
+## Slide-by-Slide Content
+
+### Slide 1: Title
+
+**Layout Type:** Title slide
+
+**On-Slide Content:**
+...
+
+**Visual Direction:**
+...
+
+**Speaker Notes:**
+...
+
+**Design Notes:**
+...
+
+---
+
+### Slide 2: ...
+...

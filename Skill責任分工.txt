@@ -1,0 +1,27 @@
+---
+
+## 更簡單的理解
+
+兩個 Skill 的責任分工如下：
+
+| Skill | 主要任務 | 輸入 | 輸出 |
+|---|---|---|---|
+| `article_to_presentation_structure` | 解析文章，重組邏輯 | 文章、報告、逐字稿 | 簡報架構、大綱、敘事流程 |
+| `presentation_generation` | 產生投影片內容 | 簡報大綱 | 每頁投影片內容、版面、講者備註 |
+| `slide_deck_creation` 或 PowerPoint Skill | 實際建立檔案 | 投影片規格 | `.pptx`、PDF、Google Slides |
+
+---
+
+## 實務上最好分三層
+
+比較成熟的流程應該是：
+
+```text
+1. article_to_presentation_structure
+   文章解析成簡報邏輯
+
+2. presentation_generation
+   簡報邏輯轉成投影片內容
+
+3. deck_file_creation
+   投影片內容轉成實際 PPTX 檔案

@@ -1,0 +1,170 @@
+---
+name: article_to_presentation_structure
+description: Analyze an article and transform it into a clear presentation structure, including audience framing, key message, slide outline, narrative flow, and recommended slide types.
+---
+
+# Article to Presentation Structure Skill
+
+## Purpose
+
+This skill helps transform a long-form article, report, essay, transcript, or white paper into a presentation-ready structure.
+
+The goal is not to summarize the article paragraph by paragraph, but to extract its argument, logic, evidence, and implications, then reorganize them into a slide-based narrative.
+
+## Input
+
+The user may provide:
+
+- A full article
+- A URL or pasted text
+- A report, paper, blog post, news article, transcript, or internal memo
+- Optional audience information
+- Optional presentation length
+- Optional purpose, such as teaching, briefing, sales, proposal, executive summary, or training
+
+## Core Process
+
+### 1. Identify the presentation context
+
+Infer or ask for:
+
+- Target audience
+- Presentation goal
+- Expected duration
+- Desired depth
+- Tone
+- Whether the output should be educational, persuasive, analytical, executive-oriented, or instructional
+
+If missing, make reasonable assumptions and state them.
+
+### 2. Extract the article structure
+
+Analyze the article for:
+
+- Main thesis
+- Core arguments
+- Supporting evidence
+- Important examples
+- Definitions
+- Data points
+- Causes and effects
+- Problems and solutions
+- Contrasts or trade-offs
+- Conclusions or recommendations
+
+Do not simply follow the article’s original order if another structure is better for presentation.
+
+### 3. Determine the narrative arc
+
+Choose the most suitable presentation flow, such as:
+
+- Problem → Cause → Solution → Action
+- Context → Insight → Implication → Recommendation
+- What → Why → How → Example → Takeaway
+- Before → Change → After
+- Claim → Evidence → Counterpoint → Conclusion
+- Situation → Complication → Resolution
+- Concept → Framework → Application → Practice
+
+### 4. Create slide-level structure
+
+For each slide, produce:
+
+- Slide number
+- Slide title
+- Main message
+- Key bullet points
+- Suggested visual type
+- Speaker note or explanation
+- Source material from the article, if useful
+
+Avoid vague slide titles like “Overview” or “Background.” Use message-driven titles.
+
+Bad:
+- Market Trends
+
+Good:
+- AI adoption is accelerating fastest in operational workflows
+
+### 5. Separate content density by slide type
+
+Use different slide types when appropriate:
+
+- Title slide
+- Agenda slide
+- Executive summary
+- Problem framing
+- Key insight slide
+- Data/chart slide
+- Framework slide
+- Comparison slide
+- Timeline slide
+- Process slide
+- Case/example slide
+- Recommendation slide
+- Risk/limitation slide
+- Closing takeaway slide
+
+### 6. Identify what should not be included
+
+Remove:
+
+- Repetitive details
+- Overly technical explanations unless audience requires them
+- Minor examples
+- Weak evidence
+- Tangential arguments
+- Article-specific prose that does not help the presentation
+
+### 7. Produce final output
+
+The final output should include:
+
+1. Presentation objective
+2. Assumed audience
+3. One-sentence core message
+4. Recommended narrative structure
+5. Slide-by-slide outline
+6. Optional shortened version
+7. Optional expanded version
+8. Notes on what was omitted and why
+
+## Output Format
+
+Use this structure:
+
+```md
+# Presentation Structure
+
+## 1. Presentation Objective
+
+...
+
+## 2. Audience Assumption
+
+...
+
+## 3. Core Message
+
+...
+
+## 4. Recommended Narrative Flow
+
+...
+
+## 5. Slide Outline
+
+| Slide | Title | Main Message | Key Points | Suggested Visual |
+|---|---|---|---|---|
+| 1 | ... | ... | ... | ... |
+
+## 6. Speaker Notes
+
+### Slide 1: ...
+...
+
+## 7. Optional Adjustments
+
+- Shorter 5-slide version
+- Standard 10-slide version
+- Detailed 15-slide version
